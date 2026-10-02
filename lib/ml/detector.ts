@@ -66,7 +66,10 @@ export async function detectBulletHoles(
 
   if (!response.ok) {
     throw new Error(
-      \`ML service returned \${response.status} \${response.statusText}\`,
+      'ML service returned ' +
+        response.status +
+        ' ' +
+        response.statusText,
     );
   }
 
