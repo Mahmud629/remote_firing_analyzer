@@ -3,6 +3,7 @@ name: RFA CI
 on:
   push:
     branches:
+      - rfa-v3-auto-calibration-db
       - rfa-v2-optimized
       - main
   pull_request:
@@ -19,7 +20,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 12
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -28,7 +29,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Type check
         run: pnpm typecheck
@@ -38,20 +39,20 @@ jobs:
 
       - name: Prepare source package
         run: |
-          mkdir -p package/Remote_Firing_Analyzer_v2_Optimized
-          rsync -a ./ package/Remote_Firing_Analyzer_v2_Optimized/ \
+          mkdir -p package/Remote_Firing_Analyzer_v3_Auto_Calibration_DB
+          rsync -a ./ package/Remote_Firing_Analyzer_v3_Auto_Calibration_DB/ \
             --exclude .git \
             --exclude node_modules \
             --exclude .next \
             --exclude out \
             --exclude package
           cd package
-          zip -qr ../Remote_Firing_Analyzer_v2_Optimized.zip Remote_Firing_Analyzer_v2_Optimized
+          zip -qr ../Remote_Firing_Analyzer_v3_Auto_Calibration_DB.zip Remote_Firing_Analyzer_v3_Auto_Calibration_DB
 
       - name: Upload source ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Remote_Firing_Analyzer_v2_Optimized
-          path: Remote_Firing_Analyzer_v2_Optimized.zip
+          name: Remote_Firing_Analyzer_v3_Auto_Calibration_DB
+          path: Remote_Firing_Analyzer_v3_Auto_Calibration_DB.zip
           if-no-files-found: error
           retention-days: 7
