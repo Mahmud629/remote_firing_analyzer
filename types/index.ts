@@ -20,6 +20,14 @@ export interface Calibration {
   scaleInches: number;
 }
 
+export interface DetectedCircle {
+  center: Point;
+  radiusPixels: number;
+  physicalRadiusInches: number;
+  confidence: number;
+  method: 'auto-circle';
+}
+
 export interface AnalysisData {
   bullets: Point[];
   poa: Point | null;
@@ -55,7 +63,6 @@ export interface ZeroingResults {
   trainingFeedback: string | null;
 }
 
-/** Compatibility alias for older report components. */
 export type FiringResult = ZeroingResults;
 
 export interface CanvasState {
@@ -73,10 +80,7 @@ export interface FirerInfo {
   date: string;
   range: number;
   photoBase64?: string;
-
-  /** Legacy field retained while older UI components are being phased out. */
   weaponNumber?: string;
-  /** Legacy field retained while older UI components are being phased out. */
   wpnNo?: string;
 }
 
@@ -92,6 +96,8 @@ export interface SavedSession {
   results: ZeroingResults;
   savedAt: string;
   markingMode?: MarkingMode;
+  calibration?: DetectedCircle | null;
+  sourceType?: 'upload' | 'camera';
   targetImageBase64?: string;
 }
 
@@ -103,6 +109,13 @@ export interface DetectionResult {
   detections: DetectionPoint[];
   model?: string;
   inferenceMs?: number;
+}
+
+export interface TargetTransform {
+  cropLeft: number;
+  cropTop: number;
+  cropSize: number;
+  outputSize: number;
 }
 
 export type WorkflowStage =
