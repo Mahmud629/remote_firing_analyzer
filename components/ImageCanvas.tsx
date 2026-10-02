@@ -8,7 +8,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import type { MarkedPoint, MarkerType, Point } from '@/types';
+import type {
+  DetectedCircle,
+  MarkedPoint,
+  MarkerType,
+  Point,
+} from '@/types';
 
 export interface DisplayMarker extends MarkedPoint {
   readonlyMarker?: boolean;
@@ -33,6 +38,7 @@ interface ImageCanvasProps {
   groupingPair?: [Point, Point] | null;
   mpiPoint?: Point | null;
   poaPoint?: Point | null;
+  calibrationCircle?: DetectedCircle | null;
 }
 
 type Box = {
@@ -54,6 +60,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
       hoveredMarkerId,
       groupingPair,
       mpiPoint,
+      calibrationCircle,
     },
     ref,
   ) {
@@ -229,6 +236,35 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
       context.restore();
     };
 
+    const drawCalibrationCircle = (context: CanvasRenderingContext2D) => {
+      if (!calibrationCircle) return;
+      context.save();
+      context.strokeStyle = '#22d3ee';
+      context.lineWidth = Math.max(3, naturalSize.width / 500);
+      context.setLineDash([14, 10]);
+      context.beginPath();
+      context.arc(
+        calibrationCircle.center.x,
+        calibrationCircle.center.y,
+        calibrationCircle.radiusPixels,
+        0,
+        Math.PI * 2,
+      );
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = '#22d3ee';
+      context.font = '700 16px Arial';
+      context.textAlign = 'center';
+      context.fillText(
+        'AUTO CAL ' +
+          calibrationCircle.physicalRadiusInches +
+          '" R',
+        calibrationCircle.center.x,
+        Math.max(24, calibrationCircle.center.y - calibrationCircle.radiusPixels + 28),
+      );
+      context.restore();
+    };
+
     useImperativeHandle(ref, () => ({
       captureCanvas: () => {
         if (!imageSrc || !imageRef.current) return '';
@@ -247,6 +283,7 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
           naturalSize.height,
         );
 
+        drawCalibrationCircle(context);
         markers.forEach((marker) => drawMarker(context, marker));
 
         if (groupingPair) {
@@ -347,8 +384,10 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
                 ? 'MARK BULLETS'
                 : currentMode === 'poa'
                   ? 'MARK POA'
-                  : 'CALIBRATION'
-              : 'REVIEW TARGET'}
+                  : 'MANUAL CALIBRATION'
+              : calibrationCircle
+                ? 'AUTO CALIBRATED'
+                : 'REVIEW TARGET'}
           </div>
           <button type="button" onClick={() => zoomBy(-0.25)} aria-label="Zoom out">
             −
@@ -399,6 +438,52 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
                   });
                 }}
               />
+
+              {calibrationCircle && (() => {
+                const center = toDisplay(calibrationCircle.center);
+                const displayRadius =
+                  (calibrationCircle.radiusPixels / naturalSize.width) *
+                  renderBox.width;
+                return (
+                  <svg className="rfa-overlay-svg">
+                    <circle
+                      cx={center.x}
+                      cy={center.y}
+                      r={displayRadius}
+                      fill="none"
+                      stroke="#22d3ee"
+                      strokeWidth="3"
+                      strokeDasharray="10 8"
+                    />
+                    <line
+                      x1={center.x - 12}
+                      y1={center.y}
+                      x2={center.x + 12}
+                      y2={center.y}
+                      stroke="#22d3ee"
+                      strokeWidth="2"
+                    />
+                    <line
+                      x1={center.x}
+                      y1={center.y - 12}
+                      x2={center.x}
+                      y2={center.y + 12}
+                      stroke="#22d3ee"
+                      strokeWidth="2"
+                    />
+                    <text
+                      x={center.x}
+                      y={Math.max(24, center.y - displayRadius + 24)}
+                      fill="#a5f3fc"
+                      fontSize="12"
+                      fontWeight="700"
+                      textAnchor="middle"
+                    >
+                      AUTO CAL {calibrationCircle.physicalRadiusInches}" R · {Math.round(calibrationCircle.confidence * 100)}%
+                    </text>
+                  </svg>
+                );
+              })()}
 
               {markers.map((marker) => {
                 const pos = toDisplay(marker);
