@@ -1,12 +1,13 @@
 {
-  "name": "my-project",
-  "version": "0.1.0",
+  "name": "remote-firing-analyzer",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm build"
   },
   "dependencies": {
     "@fontsource/roboto": "^5.2.10",
