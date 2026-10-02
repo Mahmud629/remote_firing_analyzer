@@ -184,7 +184,7 @@ export function analyzeZeroing(
   if (bullets.length !== ZEROING_PROFILE.requiredShots) {
     result.status = 'WASHOUT';
     result.washoutReasons.push(
-      \`Exactly \${ZEROING_PROFILE.requiredShots} bullet marks are required (marked: \${bullets.length}).\`,
+      'Exactly ' + ZEROING_PROFILE.requiredShots + ' bullet marks are required (marked: ' + bullets.length + ').',
     );
     return result;
   }
