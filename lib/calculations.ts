@@ -213,7 +213,7 @@ export function analyzeZeroing(
   if (result.groupingInches > ZEROING_PROFILE.maxGroupingInches) {
     result.status = 'WASHOUT';
     result.washoutReasons.push(
-      \`Grouping exceeds \${ZEROING_PROFILE.maxGroupingInches} inches (\${result.groupingInches.toFixed(2)}").\`,
+      'Grouping exceeds ' + ZEROING_PROFILE.maxGroupingInches + ' inches (' + result.groupingInches.toFixed(2) + '\").',
     );
   }
 
