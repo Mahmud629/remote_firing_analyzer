@@ -73,6 +73,10 @@ export function generateFiringReport(session: SavedSession): void {
     row(
       'Marking Method',
       escapeHtml((session.markingMode || 'manual').toUpperCase()),
+    ) +
+    row(
+      'Target Source',
+      escapeHtml((session.sourceType || 'upload').toUpperCase()),
     );
 
   const analysisRows =
@@ -86,6 +90,25 @@ export function generateFiringReport(session: SavedSession): void {
     row('MPI Vertical', format(results.mpiCm?.y, ' cm')) +
     row('Lateral Adjustment', escapeHtml(lateral)) +
     row('Vertical Adjustment', escapeHtml(vertical));
+
+  const calibrationRows = session.calibration
+    ? row(
+        'Calibration',
+        'AUTO OUTER CIRCLE',
+      ) +
+      row(
+        'Known Radius',
+        format(session.calibration.physicalRadiusInches, '"'),
+      ) +
+      row(
+        'Detected Radius',
+        format(session.calibration.radiusPixels, ' px'),
+      ) +
+      row(
+        'Confidence',
+        Math.round(session.calibration.confidence * 100) + '%',
+      )
+    : row('Calibration', 'MANUAL FALLBACK');
 
   const feedback = escapeHtml(
     results.trainingFeedback ||
@@ -152,17 +175,20 @@ export function generateFiringReport(session: SavedSession): void {
     '">' +
     escapeHtml(results.status.replaceAll('_', ' ')) +
     '</div></section>' +
+    '<section class="card"><h2>Calibration</h2>' +
+    calibrationRows +
+    '</section>' +
     '<section class="card"><h2>MPI / Correction</h2>' +
     correctionRows +
     '</section>' +
-    '<section class="card"><h2>Feedback</h2><div class="feedback">' +
+    '<section class="card wide"><h2>Feedback</h2><div class="feedback">' +
     feedback +
     '</div>' +
     washout +
     '</section>' +
     target +
     '</div>' +
-    '<div class="footer"><span>Remote Firing Analyzer v2.0</span><span>Generated ' +
+    '<div class="footer"><span>Remote Firing Analyzer v3.0</span><span>Generated ' +
     escapeHtml(new Date().toLocaleString()) +
     '</span></div>' +
     '</div><script>window.addEventListener("load",function(){window.print();});</script>' +
