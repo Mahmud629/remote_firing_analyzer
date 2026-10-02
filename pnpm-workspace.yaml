@@ -1,0 +1,4 @@
+allowBuilds:
+  sharp: true
+  "@firebase/util": true
+  protobufjs: true

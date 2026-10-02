@@ -2,12 +2,18 @@
 
 import React, {
   forwardRef,
+  useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
-  MouseEvent,
   useState,
 } from 'react';
-import { Point, MarkedPoint } from '@/types';
+import type {
+  DetectedCircle,
+  MarkedPoint,
+  MarkerType,
+  Point,
+} from '@/types';
 
 export interface DisplayMarker extends MarkedPoint {
   readonlyMarker?: boolean;
@@ -23,18 +29,19 @@ export interface ImageCanvasHandle {
 interface ImageCanvasProps {
   imageSrc: string | null;
   markers: DisplayMarker[];
-  onMarkerAdd: (point: Point, type: 'bullet' | 'poa' | 'calibration') => void;
+  onMarkerAdd: (point: Point, type: MarkerType) => void;
   onMarkerRemove: (id: string) => void;
   onMarkerHover: (id: string | null) => void;
-  currentMode: 'bullet' | 'poa' | 'calibration' | null;
+  currentMode: MarkerType | null;
   hoveredMarkerId: string | null;
   scalePixels: number | null;
   groupingPair?: [Point, Point] | null;
   mpiPoint?: Point | null;
   poaPoint?: Point | null;
+  calibrationCircle?: DetectedCircle | null;
 }
 
-type RenderBox = {
+type Box = {
   left: number;
   top: number;
   width: number;
@@ -42,7 +49,7 @@ type RenderBox = {
 };
 
 export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
-  (
+  function ImageCanvas(
     {
       imageSrc,
       markers,
@@ -50,489 +57,531 @@ export const ImageCanvas = forwardRef<ImageCanvasHandle, ImageCanvasProps>(
       onMarkerRemove,
       onMarkerHover,
       currentMode,
+      hoveredMarkerId,
       groupingPair,
       mpiPoint,
+      calibrationCircle,
     },
-    ref
-  ) => {
-    const imgRef = useRef<HTMLImageElement | null>(null);
+    ref,
+  ) {
+    const imageRef = useRef<HTMLImageElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
-    const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const pointerRef = useRef<{
+      id: number;
+      x: number;
+      y: number;
+      panX: number;
+      panY: number;
+      moved: boolean;
+    } | null>(null);
 
     const [naturalSize, setNaturalSize] = useState({ width: 1, height: 1 });
-
-    // Zoom + pan states
+    const [containerSize, setContainerSize] = useState({ width: 1, height: 1 });
     const [zoom, setZoom] = useState(1);
-    const [panX, setPanX] = useState(0);
-    const [panY, setPanY] = useState(0);
-    const [isDragging, setIsDragging] = useState(false);
-    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-    const [dragMoved, setDragMoved] = useState(false);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
 
-    const resetView = () => {
-      setZoom(1);
-      setPanX(0);
-      setPanY(0);
-    };
+    useEffect(() => {
+      const element = containerRef.current;
+      if (!element) return;
 
-    const zoomIn = () => {
-      setZoom((prev) => Math.min(prev + 0.2, 5));
-    };
-
-    const zoomOut = () => {
-      setZoom((prev) => {
-        const next = Math.max(prev - 0.2, 1);
-        if (next === 1) {
-          setPanX(0);
-          setPanY(0);
-        }
-        return next;
-      });
-    };
-
-    const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      if (e.deltaY < 0) {
-        setZoom((prev) => Math.min(prev + 0.1, 5));
-      } else {
-        setZoom((prev) => {
-          const next = Math.max(prev - 0.1, 1);
-          if (next === 1) {
-            setPanX(0);
-            setPanY(0);
-          }
-          return next;
+      const update = () => {
+        const rect = element.getBoundingClientRect();
+        setContainerSize({
+          width: Math.max(1, rect.width),
+          height: Math.max(1, rect.height),
         });
-      }
-    };
+      };
 
-    const getBaseImageBox = (): RenderBox | null => {
+      update();
+      const observer = new ResizeObserver(update);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    }, [imageSrc]);
+
+    const baseBox = useMemo<Box>(() => {
+      const imageAspect = naturalSize.width / naturalSize.height;
+      const containerAspect = containerSize.width / containerSize.height;
+
+      if (imageAspect > containerAspect) {
+        const width = containerSize.width;
+        const height = width / imageAspect;
+        return {
+          left: 0,
+          top: (containerSize.height - height) / 2,
+          width,
+          height,
+        };
+      }
+
+      const height = containerSize.height;
+      const width = height * imageAspect;
+      return {
+        left: (containerSize.width - width) / 2,
+        top: 0,
+        width,
+        height,
+      };
+    }, [containerSize, naturalSize]);
+
+    const renderBox = useMemo<Box>(() => {
+      const width = baseBox.width * zoom;
+      const height = baseBox.height * zoom;
+      const centerX = baseBox.left + baseBox.width / 2 + pan.x;
+      const centerY = baseBox.top + baseBox.height / 2 + pan.y;
+
+      return {
+        left: centerX - width / 2,
+        top: centerY - height / 2,
+        width,
+        height,
+      };
+    }, [baseBox, pan, zoom]);
+
+    const toDisplay = (point: Point) => ({
+      x: renderBox.left + (point.x / naturalSize.width) * renderBox.width,
+      y: renderBox.top + (point.y / naturalSize.height) * renderBox.height,
+    });
+
+    const toImagePoint = (clientX: number, clientY: number): Point | null => {
       const container = containerRef.current;
       if (!container) return null;
 
       const rect = container.getBoundingClientRect();
-      const containerWidth = rect.width;
-      const containerHeight = rect.height;
-
-      const naturalWidth = naturalSize.width;
-      const naturalHeight = naturalSize.height;
-
-      if (!naturalWidth || !naturalHeight || !containerWidth || !containerHeight) {
-        return null;
-      }
-
-      const imageAspect = naturalWidth / naturalHeight;
-      const containerAspect = containerWidth / containerHeight;
-
-      let width = 0;
-      let height = 0;
-      let left = 0;
-      let top = 0;
-
-      if (imageAspect > containerAspect) {
-        width = containerWidth;
-        height = containerWidth / imageAspect;
-        left = 0;
-        top = (containerHeight - height) / 2;
-      } else {
-        height = containerHeight;
-        width = containerHeight * imageAspect;
-        top = 0;
-        left = (containerWidth - width) / 2;
-      }
-
-      return { left, top, width, height };
-    };
-
-    const getRenderedImageBox = (): RenderBox | null => {
-      const base = getBaseImageBox();
-      if (!base) return null;
-
-      const zoomedWidth = base.width * zoom;
-      const zoomedHeight = base.height * zoom;
-
-      const centerX = base.left + base.width / 2 + panX;
-      const centerY = base.top + base.height / 2 + panY;
-
-      return {
-        width: zoomedWidth,
-        height: zoomedHeight,
-        left: centerX - zoomedWidth / 2,
-        top: centerY - zoomedHeight / 2,
-      };
-    };
-
-    const getImagePointFromClick = (e: MouseEvent<HTMLDivElement>): Point | null => {
-      const container = containerRef.current;
-      const renderBox = getRenderedImageBox();
-      if (!container || !renderBox) return null;
-
-      const containerRect = container.getBoundingClientRect();
-      const localX = e.clientX - containerRect.left;
-      const localY = e.clientY - containerRect.top;
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
 
       if (
-        localX < renderBox.left ||
-        localY < renderBox.top ||
-        localX > renderBox.left + renderBox.width ||
-        localY > renderBox.top + renderBox.height
+        x < renderBox.left ||
+        y < renderBox.top ||
+        x > renderBox.left + renderBox.width ||
+        y > renderBox.top + renderBox.height
       ) {
         return null;
       }
 
-      const xInImage = localX - renderBox.left;
-      const yInImage = localY - renderBox.top;
-
       return {
-        x: (xInImage / renderBox.width) * naturalSize.width,
-        y: (yInImage / renderBox.height) * naturalSize.height,
+        x: ((x - renderBox.left) / renderBox.width) * naturalSize.width,
+        y: ((y - renderBox.top) / renderBox.height) * naturalSize.height,
       };
     };
 
-    const toDisplayPosition = (point: Point) => {
-      const renderBox = getRenderedImageBox();
-      if (!renderBox) return { x: 0, y: 0 };
-
-      return {
-        x: renderBox.left + (point.x / naturalSize.width) * renderBox.width,
-        y: renderBox.top + (point.y / naturalSize.height) * renderBox.height,
-      };
-    };
-
-    const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (zoom <= 1) return;
-      setIsDragging(true);
-      setDragMoved(false);
-      setDragStart({
-        x: e.clientX - panX,
-        y: e.clientY - panY,
-      });
-    };
-
-    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!isDragging || zoom <= 1) return;
-      setDragMoved(true);
-      setPanX(e.clientX - dragStart.x);
-      setPanY(e.clientY - dragStart.y);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    const handleCanvasClick = (e: MouseEvent<HTMLDivElement>) => {
-      if (dragMoved) return;
-      if (!currentMode || !imageSrc) return;
-      const point = getImagePointFromClick(e);
-      if (!point) return;
-      onMarkerAdd(point, currentMode);
-    };
-
-    const getMarkerColor = (marker: DisplayMarker) => {
+    const markerColor = (marker: DisplayMarker) => {
       if (marker.displayColor) return marker.displayColor;
-      if (marker.type === 'calibration') return '#a855f7'; // purple
-      if (marker.type === 'poa') return '#2563eb'; // blue
-      return '#22c55e'; // green
+      if (marker.type === 'calibration') return '#a78bfa';
+      if (marker.type === 'poa') return '#22c55e';
+      if (marker.source === 'ml') return '#22d3ee';
+      return '#fb923c';
     };
 
-    const drawMarkerOnCanvas = (
-      ctx: CanvasRenderingContext2D,
-      marker: DisplayMarker,
-      index: number
-    ) => {
-      const color = getMarkerColor(marker);
-      const opacity = marker.displayOpacity ?? 1;
+    const bulletLabels = useMemo(() => {
+      const map = new Map<string, number>();
+      let index = 0;
+      markers.forEach((marker) => {
+        if (marker.type === 'bullet') {
+          index += 1;
+          map.set(marker.id, index);
+        }
+      });
+      return map;
+    }, [markers]);
 
-      ctx.save();
-      ctx.globalAlpha = opacity;
+    const drawMarker = (
+      context: CanvasRenderingContext2D,
+      marker: DisplayMarker,
+    ) => {
+      const color = markerColor(marker);
+      context.save();
+      context.globalAlpha = marker.displayOpacity ?? 1;
+      context.strokeStyle = color;
+      context.fillStyle = color;
 
       if (marker.type === 'bullet') {
-        ctx.beginPath();
-        ctx.arc(marker.x, marker.y, 5, 0, Math.PI * 2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(marker.x, marker.y, 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(marker.x, marker.y, 7, 0, Math.PI * 2);
+        context.stroke();
+        context.beginPath();
+        context.arc(marker.x, marker.y, 2.2, 0, Math.PI * 2);
+        context.fill();
+      } else {
+        context.beginPath();
+        context.arc(marker.x, marker.y, marker.type === 'poa' ? 10 : 8, 0, Math.PI * 2);
+        context.fill();
+        context.lineWidth = 2;
+        context.strokeStyle = '#ffffff';
+        context.stroke();
       }
 
-      if (marker.type === 'poa') {
-        ctx.beginPath();
-        ctx.arc(marker.x, marker.y, 10, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#ffffff';
-        ctx.stroke();
-      }
+      const label =
+        marker.displayLabel ||
+        (marker.type === 'bullet'
+          ? String(bulletLabels.get(marker.id) || '')
+          : marker.type === 'poa'
+            ? 'POA'
+            : 'CAL');
 
-      if (marker.type === 'calibration') {
-        ctx.beginPath();
-        ctx.arc(marker.x, marker.y, 7, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#ffffff';
-        ctx.stroke();
-      }
+      context.globalAlpha = 1;
+      context.font = '700 12px Arial';
+      context.textAlign = 'center';
+      context.fillStyle = '#ffffff';
+      context.strokeStyle = '#0f172a';
+      context.lineWidth = 3;
+      context.strokeText(label, marker.x, marker.y - 15);
+      context.fillText(label, marker.x, marker.y - 15);
+      context.restore();
+    };
 
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 11px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(marker.displayLabel || String(index + 1), marker.x, marker.y - 14);
-
-      ctx.restore();
+    const drawCalibrationCircle = (context: CanvasRenderingContext2D) => {
+      if (!calibrationCircle) return;
+      context.save();
+      context.strokeStyle = '#22d3ee';
+      context.lineWidth = Math.max(3, naturalSize.width / 500);
+      context.setLineDash([14, 10]);
+      context.beginPath();
+      context.arc(
+        calibrationCircle.center.x,
+        calibrationCircle.center.y,
+        calibrationCircle.radiusPixels,
+        0,
+        Math.PI * 2,
+      );
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = '#22d3ee';
+      context.font = '700 16px Arial';
+      context.textAlign = 'center';
+      context.fillText(
+        'AUTO CAL ' +
+          calibrationCircle.physicalRadiusInches +
+          '" R',
+        calibrationCircle.center.x,
+        Math.max(24, calibrationCircle.center.y - calibrationCircle.radiusPixels + 28),
+      );
+      context.restore();
     };
 
     useImperativeHandle(ref, () => ({
       captureCanvas: () => {
-        if (!imageSrc || !imgRef.current) return '';
+        if (!imageSrc || !imageRef.current) return '';
 
-        const canvas = captureCanvasRef.current || document.createElement('canvas');
-        captureCanvasRef.current = canvas;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return '';
-
+        const canvas = document.createElement('canvas');
         canvas.width = naturalSize.width;
         canvas.height = naturalSize.height;
+        const context = canvas.getContext('2d');
+        if (!context) return '';
 
-        ctx.drawImage(imgRef.current, 0, 0, naturalSize.width, naturalSize.height);
+        context.drawImage(
+          imageRef.current,
+          0,
+          0,
+          naturalSize.width,
+          naturalSize.height,
+        );
 
-        markers.forEach((marker, index) => {
-          drawMarkerOnCanvas(ctx, marker, index);
-        });
+        drawCalibrationCircle(context);
+        markers.forEach((marker) => drawMarker(context, marker));
 
         if (groupingPair) {
-          ctx.save();
-          ctx.strokeStyle = '#f59e0b';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.moveTo(groupingPair[0].x, groupingPair[0].y);
-          ctx.lineTo(groupingPair[1].x, groupingPair[1].y);
-          ctx.stroke();
-          ctx.restore();
+          context.save();
+          context.strokeStyle = '#f59e0b';
+          context.lineWidth = 3;
+          context.beginPath();
+          context.moveTo(groupingPair[0].x, groupingPair[0].y);
+          context.lineTo(groupingPair[1].x, groupingPair[1].y);
+          context.stroke();
+          context.restore();
         }
 
         if (mpiPoint) {
-          ctx.save();
-          ctx.strokeStyle = '#facc15';
-          ctx.lineWidth = 4;
-          const size = 14;
-          ctx.beginPath();
-          ctx.moveTo(mpiPoint.x - size, mpiPoint.y);
-          ctx.lineTo(mpiPoint.x + size, mpiPoint.y);
-          ctx.moveTo(mpiPoint.x, mpiPoint.y - size);
-          ctx.lineTo(mpiPoint.x, mpiPoint.y + size);
-          ctx.stroke();
-          ctx.restore();
+          context.save();
+          context.strokeStyle = '#fde047';
+          context.lineWidth = 4;
+          const size = 16;
+          context.beginPath();
+          context.moveTo(mpiPoint.x - size, mpiPoint.y);
+          context.lineTo(mpiPoint.x + size, mpiPoint.y);
+          context.moveTo(mpiPoint.x, mpiPoint.y - size);
+          context.lineTo(mpiPoint.x, mpiPoint.y + size);
+          context.stroke();
+          context.restore();
         }
 
-        return canvas.toDataURL('image/png');
+        return canvas.toDataURL('image/jpeg', 0.94);
       },
     }));
 
+    const zoomBy = (amount: number) => {
+      setZoom((current) => {
+        const next = Math.min(5, Math.max(1, current + amount));
+        if (next === 1) setPan({ x: 0, y: 0 });
+        return next;
+      });
+    };
+
+    const resetView = () => {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    };
+
+    const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+      if (zoom <= 1) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      pointerRef.current = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        panX: pan.x,
+        panY: pan.y,
+        moved: false,
+      };
+    };
+
+    const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+      const pointer = pointerRef.current;
+      if (!pointer || pointer.id !== event.pointerId) return;
+
+      const dx = event.clientX - pointer.x;
+      const dy = event.clientY - pointer.y;
+
+      if (Math.abs(dx) + Math.abs(dy) > 4) pointer.moved = true;
+      setPan({ x: pointer.panX + dx, y: pointer.panY + dy });
+    };
+
+    const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+      const pointer = pointerRef.current;
+      if (!pointer || pointer.id !== event.pointerId) return;
+
+      if (!pointer.moved && currentMode && imageSrc) {
+        const point = toImagePoint(event.clientX, event.clientY);
+        if (point) onMarkerAdd(point, currentMode);
+      }
+
+      pointerRef.current = null;
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer may already be released by the browser.
+      }
+    };
+
+    const clickToAdd = (event: React.MouseEvent<HTMLDivElement>) => {
+      if (zoom > 1 || !currentMode || !imageSrc) return;
+      const point = toImagePoint(event.clientX, event.clientY);
+      if (point) onMarkerAdd(point, currentMode);
+    };
+
     return (
-      <div className="relative flex-1 overflow-hidden rounded-lg border border-slate-700 bg-slate-950">
-        {/* Controls */}
-        <div className="absolute top-2 left-2 z-30 flex gap-2">
-          <button
-            type="button"
-            onClick={zoomIn}
-            className="px-3 py-1 rounded bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600"
-          >
+      <div className="rfa-canvas-shell">
+        <div className="rfa-canvas-toolbar">
+          <div className="rfa-canvas-mode">
+            {currentMode
+              ? currentMode === 'bullet'
+                ? 'MARK BULLETS'
+                : currentMode === 'poa'
+                  ? 'MARK POA'
+                  : 'MANUAL CALIBRATION'
+              : calibrationCircle
+                ? 'AUTO CALIBRATED'
+                : 'REVIEW TARGET'}
+          </div>
+          <button type="button" onClick={() => zoomBy(-0.25)} aria-label="Zoom out">
+            −
+          </button>
+          <span>{zoom.toFixed(2)}×</span>
+          <button type="button" onClick={() => zoomBy(0.25)} aria-label="Zoom in">
             +
           </button>
-          <button
-            type="button"
-            onClick={zoomOut}
-            className="px-3 py-1 rounded bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600"
-          >
-            -
+          <button type="button" onClick={resetView}>
+            Fit
           </button>
-          <button
-            type="button"
-            onClick={resetView}
-            className="px-3 py-1 rounded bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600"
-          >
-            Reset View
-          </button>
-          <div className="px-3 py-1 rounded bg-black/60 text-white text-sm">
-            {zoom.toFixed(1)}x
-          </div>
         </div>
 
         <div
           ref={containerRef}
-          className={`relative w-full h-full overflow-hidden ${zoom > 1 ? 'cursor-move' : 'cursor-crosshair'}`}
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onClick={handleCanvasClick}
+          className={'rfa-canvas ' + (zoom > 1 ? 'is-pannable' : '')}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            pointerRef.current = null;
+          }}
+          onClick={clickToAdd}
+          onWheel={(event) => {
+            event.preventDefault();
+            zoomBy(event.deltaY < 0 ? 0.15 : -0.15);
+          }}
         >
-          {imageSrc && (() => {
-            const renderBox = getRenderedImageBox();
+          {imageSrc && (
+            <>
+              <img
+                ref={imageRef}
+                src={imageSrc}
+                alt="Target"
+                draggable={false}
+                className="rfa-target-image"
+                style={{
+                  left: renderBox.left,
+                  top: renderBox.top,
+                  width: renderBox.width,
+                  height: renderBox.height,
+                }}
+                onLoad={(event) => {
+                  const img = event.currentTarget;
+                  setNaturalSize({
+                    width: img.naturalWidth || 1,
+                    height: img.naturalHeight || 1,
+                  });
+                }}
+              />
 
-            return (
-              <>
-                <img
-                  ref={imgRef}
-                  src={imageSrc}
-                  alt="Target"
-                  className="absolute select-none pointer-events-none"
-                  style={{
-                    left: renderBox?.left ?? 0,
-                    top: renderBox?.top ?? 0,
-                    width: renderBox?.width ?? 0,
-                    height: renderBox?.height ?? 0,
-                  }}
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    setNaturalSize({
-                      width: img.naturalWidth || 1,
-                      height: img.naturalHeight || 1,
-                    });
-                  }}
-                  draggable={false}
-                />
-
-                {markers.map((marker, index) => {
-                  const pos = toDisplayPosition(marker);
-                  const color = getMarkerColor(marker);
-                  const opacity = marker.displayOpacity ?? 1;
-
-                  const circleSize =
-                    marker.type === 'poa' ? 20 :
-                    marker.type === 'calibration' ? 14 :
-                    10;
-
-                  return (
-                    <div
-                      key={marker.id}
-                      className="absolute pointer-events-auto"
-                      style={{
-                        left: pos.x,
-                        top: pos.y,
-                        opacity,
-                        transform: 'translate(-50%, -50%)',
-                      }}
-                      onMouseEnter={() => onMarkerHover(marker.id)}
-                      onMouseLeave={() => onMarkerHover(null)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!marker.readonlyMarker) {
-                          onMarkerRemove(marker.id);
-                        }
-                      }}
+              {calibrationCircle && (() => {
+                const center = toDisplay(calibrationCircle.center);
+                const displayRadius =
+                  (calibrationCircle.radiusPixels / naturalSize.width) *
+                  renderBox.width;
+                return (
+                  <svg className="rfa-overlay-svg">
+                    <circle
+                      cx={center.x}
+                      cy={center.y}
+                      r={displayRadius}
+                      fill="none"
+                      stroke="#22d3ee"
+                      strokeWidth="3"
+                      strokeDasharray="10 8"
+                    />
+                    <line
+                      x1={center.x - 12}
+                      y1={center.y}
+                      x2={center.x + 12}
+                      y2={center.y}
+                      stroke="#22d3ee"
+                      strokeWidth="2"
+                    />
+                    <line
+                      x1={center.x}
+                      y1={center.y - 12}
+                      x2={center.x}
+                      y2={center.y + 12}
+                      stroke="#22d3ee"
+                      strokeWidth="2"
+                    />
+                    <text
+                      x={center.x}
+                      y={Math.max(24, center.y - displayRadius + 24)}
+                      fill="#a5f3fc"
+                      fontSize="12"
+                      fontWeight="700"
+                      textAnchor="middle"
                     >
-                      {marker.type === 'bullet' ? (
-                        <div
-                          className="absolute rounded-full"
-                          style={{
-                            width: circleSize,
-                            height: circleSize,
-                            left: '50%',
-                            top: '50%',
-                            transform: 'translate(-50%, -50%)',
-                            border: `1.5px solid ${color}`,
-                            background: 'transparent',
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: 3,
-                              height: 3,
-                              backgroundColor: color,
-                              borderRadius: '50%',
-                              position: 'absolute',
-                              left: '50%',
-                              top: '50%',
-                              transform: 'translate(-50%, -50%)',
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div
-                          className="absolute flex items-center justify-center rounded-full border-2 border-white text-[9px] font-bold text-white shadow-lg"
-                          style={{
-                            width: circleSize,
-                            height: circleSize,
-                            backgroundColor: color,
-                            left: '50%',
-                            top: '50%',
-                            transform: 'translate(-50%, -50%)',
-                          }}
-                        >
-                          {marker.type === 'poa' ? 'P' : 'C'}
-                        </div>
-                      )}
+                      AUTO CAL {calibrationCircle.physicalRadiusInches}" R · {Math.round(calibrationCircle.confidence * 100)}%
+                    </text>
+                  </svg>
+                );
+              })()}
 
-                      <div
-                        className="absolute text-[10px] font-bold text-white bg-black/60 px-1 rounded whitespace-nowrap"
-                        style={{
-                          left: '50%',
-                          top: `-${circleSize / 2 + 16}px`,
-                          transform: 'translateX(-50%)',
-                        }}
-                      >
-                        {marker.displayLabel || index + 1}
-                      </div>
-                    </div>
-                  );
-                })}
+              {markers.map((marker) => {
+                const pos = toDisplay(marker);
+                const color = markerColor(marker);
+                const bulletNumber = bulletLabels.get(marker.id);
+                const label =
+                  marker.displayLabel ||
+                  (marker.type === 'bullet'
+                    ? String(bulletNumber || '')
+                    : marker.type === 'poa'
+                      ? 'P'
+                      : 'C');
 
-                {groupingPair && (() => {
-                  const p1 = toDisplayPosition(groupingPair[0]);
-                  const p2 = toDisplayPosition(groupingPair[1]);
-                  return (
-                    <svg className="absolute inset-0 pointer-events-none w-full h-full">
+                return (
+                  <button
+                    key={marker.id}
+                    type="button"
+                    className={[
+                      'rfa-marker',
+                      'marker-' + marker.type,
+                      marker.source === 'ml' ? 'is-ml' : '',
+                      hoveredMarkerId === marker.id ? 'is-hovered' : '',
+                    ].join(' ')}
+                    style={{
+                      left: pos.x,
+                      top: pos.y,
+                      borderColor: color,
+                      color,
+                      opacity: marker.displayOpacity ?? 1,
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!marker.readonlyMarker) onMarkerRemove(marker.id);
+                    }}
+                    onMouseEnter={() => onMarkerHover(marker.id)}
+                    onMouseLeave={() => onMarkerHover(null)}
+                    title={
+                      marker.confidence !== undefined
+                        ? 'ML confidence: ' + Math.round(marker.confidence * 100) + '%'
+                        : 'Click to remove'
+                    }
+                  >
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+
+              {groupingPair && (
+                <svg className="rfa-overlay-svg">
+                  {(() => {
+                    const start = toDisplay(groupingPair[0]);
+                    const end = toDisplay(groupingPair[1]);
+                    return (
                       <line
-                        x1={p1.x}
-                        y1={p1.y}
-                        x2={p2.x}
-                        y2={p2.y}
+                        x1={start.x}
+                        y1={start.y}
+                        x2={end.x}
+                        y2={end.y}
                         stroke="#f59e0b"
                         strokeWidth="3"
                       />
-                    </svg>
-                  );
-                })()}
+                    );
+                  })()}
+                </svg>
+              )}
 
-                {mpiPoint && (() => {
-                  const p = toDisplayPosition(mpiPoint);
-                  return (
-                    <svg className="absolute inset-0 pointer-events-none w-full h-full">
-                      <line
-                        x1={p.x - 14}
-                        y1={p.y}
-                        x2={p.x + 14}
-                        y2={p.y}
-                        stroke="#facc15"
-                        strokeWidth="4"
-                      />
-                      <line
-                        x1={p.x}
-                        y1={p.y - 14}
-                        x2={p.x}
-                        y2={p.y + 14}
-                        stroke="#facc15"
-                        strokeWidth="4"
-                      />
-                    </svg>
-                  );
-                })()}
-              </>
-            );
-          })()}
+              {mpiPoint && (
+                <svg className="rfa-overlay-svg">
+                  {(() => {
+                    const point = toDisplay(mpiPoint);
+                    return (
+                      <>
+                        <line
+                          x1={point.x - 15}
+                          y1={point.y}
+                          x2={point.x + 15}
+                          y2={point.y}
+                          stroke="#fde047"
+                          strokeWidth="4"
+                        />
+                        <line
+                          x1={point.x}
+                          y1={point.y - 15}
+                          x2={point.x}
+                          y2={point.y + 15}
+                          stroke="#fde047"
+                          strokeWidth="4"
+                        />
+                      </>
+                    );
+                  })()}
+                </svg>
+              )}
+            </>
+          )}
         </div>
       </div>
     );
-  }
+  },
 );
-
-ImageCanvas.displayName = 'ImageCanvas';
