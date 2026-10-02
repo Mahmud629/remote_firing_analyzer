@@ -35,3 +35,23 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Prepare source package
+        run: |
+          mkdir -p package/Remote_Firing_Analyzer_v2_Optimized
+          rsync -a ./ package/Remote_Firing_Analyzer_v2_Optimized/ \
+            --exclude .git \
+            --exclude node_modules \
+            --exclude .next \
+            --exclude out \
+            --exclude package
+          cd package
+          zip -qr ../Remote_Firing_Analyzer_v2_Optimized.zip Remote_Firing_Analyzer_v2_Optimized
+
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Remote_Firing_Analyzer_v2_Optimized
+          path: Remote_Firing_Analyzer_v2_Optimized.zip
+          if-no-files-found: error
+          retention-days: 7
