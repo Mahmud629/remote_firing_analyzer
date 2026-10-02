@@ -9,11 +9,6 @@
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm build"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "sharp"
-    ]
-  },
   "dependencies": {
     "@fontsource/roboto": "^5.2.10",
     "@fontsource/roboto-mono": "^5.2.9",
