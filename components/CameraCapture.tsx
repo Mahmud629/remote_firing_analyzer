@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import StreamPlayer from './StreamPlayer';
+import StreamPlayer, { type StreamStatus } from './StreamPlayer';
+import { STREAM_BASE_URL, STREAM_CAMERA_COUNT } from '@/lib/config';
 
 type CameraCaptureProps = {
   onCapture: (image: string) => void;
@@ -23,286 +24,242 @@ type StreamCameraSource = {
 
 type CameraSource = BrowserCameraSource | StreamCameraSource;
 
-const STREAM_SOURCES: StreamCameraSource[] = [
-  { id: 'cam1', name: 'Camera 1', type: 'stream', streamUrl: 'http://localhost:8888/cam1/index.m3u8' },
-  { id: 'cam2', name: 'Camera 2', type: 'stream', streamUrl: 'http://localhost:8888/cam2/index.m3u8' },
-  { id: 'cam3', name: 'Camera 3', type: 'stream', streamUrl: 'http://localhost:8888/cam3/index.m3u8' },
-  { id: 'cam4', name: 'Camera 4', type: 'stream', streamUrl: 'http://localhost:8888/cam4/index.m3u8' },
-  { id: 'cam5', name: 'Camera 5', type: 'stream', streamUrl: 'http://localhost:8888/cam5/index.m3u8' },
-  { id: 'cam6', name: 'Camera 6', type: 'stream', streamUrl: 'http://localhost:8888/cam6/index.m3u8' },
-  { id: 'cam7', name: 'Camera 7', type: 'stream', streamUrl: 'http://localhost:8888/cam7/index.m3u8' },
-  { id: 'cam8', name: 'Camera 8', type: 'stream', streamUrl: 'http://localhost:8888/cam8/index.m3u8' },
-  { id: 'cam9', name: 'Camera 9', type: 'stream', streamUrl: 'http://localhost:8888/cam9/index.m3u8' },
-  { id: 'cam10', name: 'Camera 10', type: 'stream', streamUrl: 'http://localhost:8888/cam10/index.m3u8' },
-  { id: 'cam11', name: 'Camera 11', type: 'stream', streamUrl: 'http://localhost:8888/cam11/index.m3u8' },
-  { id: 'cam12', name: 'Camera 12', type: 'stream', streamUrl: 'http://localhost:8888/cam12/index.m3u8' },
-];
+function buildStreamSources(): StreamCameraSource[] {
+  return Array.from({ length: Math.max(0, STREAM_CAMERA_COUNT) }, (_, index) => {
+    const number = index + 1;
+    return {
+      id: 'cam' + number,
+      name: 'Range Camera ' + String(number).padStart(2, '0'),
+      type: 'stream' as const,
+      streamUrl: STREAM_BASE_URL + '/cam' + number + '/index.m3u8',
+    };
+  });
+}
+
+const STREAM_SOURCES = buildStreamSources();
 
 export default function CameraCapture({ onCapture }: CameraCaptureProps) {
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
   const webcamStreamRef = useRef<MediaStream | null>(null);
 
   const [browserSources, setBrowserSources] = useState<BrowserCameraSource[]>([]);
-  const [selectedSourceId, setSelectedSourceId] = useState<string>('');
-  const [isLoadingSources, setIsLoadingSources] = useState(false);
-  const [isStarting, setIsStarting] = useState(false);
-  const [error, setError] = useState<string>('');
-  const [activeBrowserCameraId, setActiveBrowserCameraId] = useState<string>('');
+  const [selectedSourceId, setSelectedSourceId] = useState<string>(
+    STREAM_SOURCES[0]?.id || '',
+  );
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [streamVideoEl, setStreamVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle');
 
-  const allSources = useMemo<CameraSource[]>(() => {
-    return [...browserSources, ...STREAM_SOURCES];
-  }, [browserSources]);
+  const allSources = useMemo<CameraSource[]>(
+    () => [...browserSources, ...STREAM_SOURCES],
+    [browserSources],
+  );
 
-  const selectedSource = useMemo(() => {
-    return allSources.find((source) => source.id === selectedSourceId) || null;
-  }, [allSources, selectedSourceId]);
+  const selectedSource = useMemo(
+    () => allSources.find((source) => source.id === selectedSourceId) || null,
+    [allSources, selectedSourceId],
+  );
 
   const stopBrowserCamera = useCallback(() => {
-    if (webcamStreamRef.current) {
-      webcamStreamRef.current.getTracks().forEach((track) => track.stop());
-      webcamStreamRef.current = null;
-    }
+    webcamStreamRef.current?.getTracks().forEach((track) => track.stop());
+    webcamStreamRef.current = null;
 
     if (webcamVideoRef.current) {
       webcamVideoRef.current.srcObject = null;
     }
-
-    setActiveBrowserCameraId('');
   }, []);
 
-  const loadBrowserCameras = useCallback(async () => {
-    setIsLoadingSources(true);
+  const discoverBrowserCameras = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return;
+
+    setBusy(true);
     setError('');
 
     try {
-      const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      tempStream.getTracks().forEach((track) => track.stop());
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoInputs = devices.filter((device) => device.kind === 'videoinput');
+      const cameras = devices
+        .filter((device) => device.kind === 'videoinput')
+        .map((device, index) => ({
+          id: 'browser-' + device.deviceId,
+          name: device.label || 'Local Camera ' + (index + 1),
+          type: 'browser' as const,
+          deviceId: device.deviceId,
+        }));
 
-      const mapped: BrowserCameraSource[] = videoInputs.map((device, index) => ({
-        id: `browser-${device.deviceId}`,
-        name: device.label || `Camera Device ${index + 1}`,
-        type: 'browser',
-        deviceId: device.deviceId,
-      }));
+      setBrowserSources(cameras);
 
-      setBrowserSources(mapped);
-
-      if (!selectedSourceId) {
-        if (mapped.length > 0) {
-          setSelectedSourceId(mapped[0].id);
-        } else if (STREAM_SOURCES.length > 0) {
-          setSelectedSourceId(STREAM_SOURCES[0].id);
-        }
+      if (!selectedSourceId && cameras.length) {
+        setSelectedSourceId(cameras[0].id);
       }
-    } catch (err) {
-      console.error(err);
-      setError('Could not load camera devices. Permission may be blocked.');
-      if (!selectedSourceId && STREAM_SOURCES.length > 0) {
-        setSelectedSourceId(STREAM_SOURCES[0].id);
-      }
+    } catch {
+      setError('Local camera access is unavailable. Network cameras can still be used.');
     } finally {
-      setIsLoadingSources(false);
+      setBusy(false);
     }
   }, [selectedSourceId]);
 
   useEffect(() => {
-    loadBrowserCameras();
-
-    return () => {
-      stopBrowserCamera();
-    };
-  }, [loadBrowserCameras, stopBrowserCamera]);
+    discoverBrowserCameras();
+    return () => stopBrowserCamera();
+  }, [discoverBrowserCameras, stopBrowserCamera]);
 
   const startSelectedSource = useCallback(async () => {
-    if (!selectedSource) {
-      setError('No camera source selected.');
-      return;
-    }
+    if (!selectedSource) return;
 
     setError('');
-    setIsStarting(true);
+    setBusy(true);
 
     try {
-      if (selectedSource.type === 'browser') {
+      if (selectedSource.type === 'stream') {
         stopBrowserCamera();
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            deviceId: { exact: selectedSource.deviceId },
-          },
-          audio: false,
-        });
-
-        webcamStreamRef.current = stream;
-
-        const video = webcamVideoRef.current;
-        if (!video) {
-          throw new Error('Video element not found.');
-        }
-
-        video.srcObject = stream;
-        await video.play();
-
-        setActiveBrowserCameraId(selectedSource.id);
-      } else {
-        stopBrowserCamera();
-        setActiveBrowserCameraId('');
+        return;
       }
-    } catch (err: any) {
-      console.error(err);
-      setError(`Failed to start selected camera. ${err?.message ? `Error ${err.message}` : ''}`.trim());
+
+      stopBrowserCamera();
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: selectedSource.deviceId },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+
+      webcamStreamRef.current = stream;
+      const video = webcamVideoRef.current;
+
+      if (!video) throw new Error('Camera preview is not available.');
+
+      video.srcObject = stream;
+      await video.play();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'Unable to start the selected camera.',
+      );
     } finally {
-      setIsStarting(false);
+      setBusy(false);
     }
   }, [selectedSource, stopBrowserCamera]);
 
-  const handleCapture = useCallback(() => {
-    if (!selectedSource) {
-      setError('No source selected.');
+  const captureFrame = useCallback(() => {
+    const video =
+      selectedSource?.type === 'stream'
+        ? streamVideoEl
+        : webcamVideoRef.current;
+
+    if (!video?.videoWidth || !video.videoHeight) {
+      setError('The video frame is not ready yet.');
       return;
     }
 
-    let sourceVideo: HTMLVideoElement | null = null;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
 
-    if (selectedSource.type === 'browser') {
-      sourceVideo = webcamVideoRef.current;
-    } else {
-      sourceVideo = streamVideoEl;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Unable to create capture canvas.');
+
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      onCapture(canvas.toDataURL('image/jpeg', 0.94));
+      setError('');
+    } catch {
+      setError(
+        'Frame capture was blocked. If this is a network stream, enable CORS on the HLS server.',
+      );
     }
-
-    if (!sourceVideo) {
-      setError('Video source is not ready.');
-      return;
-    }
-
-    const videoWidth = sourceVideo.videoWidth;
-    const videoHeight = sourceVideo.videoHeight;
-
-    if (!videoWidth || !videoHeight) {
-      setError('Video frame is not available yet.');
-      return;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = videoWidth;
-    canvas.height = videoHeight;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      setError('Could not capture frame.');
-      return;
-    }
-
-    ctx.drawImage(sourceVideo, 0, 0, videoWidth, videoHeight);
-
-    const image = canvas.toDataURL('image/png');
-    onCapture(image);
   }, [onCapture, selectedSource, streamVideoEl]);
 
-  const handleStop = useCallback(() => {
-    stopBrowserCamera();
-    setError('');
-  }, [stopBrowserCamera]);
-
   return (
-    <div className="flex flex-col gap-3">
-      <div>
-        <label className="block text-sm font-semibold text-slate-200 mb-2">
-          Camera Source
-        </label>
-
-        <select
-          value={selectedSourceId}
-          onChange={(e) => setSelectedSourceId(e.target.value)}
-          className="w-full rounded-lg border border-slate-700 bg-slate-700 text-white px-3 py-2 outline-none"
-        >
-          {browserSources.length > 0 && (
-            <optgroup label="Local / Virtual Cameras">
-              {browserSources.map((source) => (
+    <div className="rfa-camera-card">
+      <div className="rfa-camera-toolbar">
+        <label className="rfa-field rfa-grow">
+          <span>Camera Source</span>
+          <select
+            value={selectedSourceId}
+            onChange={(e) => setSelectedSourceId(e.target.value)}
+          >
+            {browserSources.length > 0 && (
+              <optgroup label="Local / USB Cameras">
+                {browserSources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="Range Network Cameras">
+              {STREAM_SOURCES.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.name}
                 </option>
               ))}
             </optgroup>
-          )}
+          </select>
+        </label>
 
-          <optgroup label="Network Cameras">
-            {STREAM_SOURCES.map((source) => (
-              <option key={source.id} value={source.id}>
-                {source.name}
-              </option>
-            ))}
-          </optgroup>
-        </select>
-      </div>
-
-      <div className="flex gap-2">
         <button
           type="button"
-          onClick={loadBrowserCameras}
-          className="px-4 py-2 rounded bg-slate-600 text-white text-sm font-semibold hover:bg-slate-500"
+          className="rfa-ghost-button"
+          onClick={discoverBrowserCameras}
+          disabled={busy}
         >
-          {isLoadingSources ? 'Refreshing...' : 'Refresh Devices'}
+          Refresh
         </button>
 
         <button
           type="button"
+          className="rfa-primary-action rfa-inline-action"
           onClick={startSelectedSource}
-          className="px-4 py-2 rounded bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500"
+          disabled={!selectedSource || busy}
         >
-          {isStarting ? 'Starting...' : 'Start Camera'}
+          {busy ? 'Starting…' : 'Start'}
         </button>
       </div>
 
-      <div className="text-xs text-slate-400">
-        Select any source from the list and click Start Camera.
-      </div>
+      {error && <div className="rfa-alert is-error">{error}</div>}
 
-      {error && (
-        <div className="rounded border border-red-700 bg-red-950/60 text-red-200 px-3 py-2 text-sm">
-          {error}
-        </div>
-      )}
-
-      <div className="rounded-lg overflow-hidden border border-slate-700 bg-black min-h-[320px] flex items-center justify-center">
+      <div className="rfa-camera-preview">
         {selectedSource?.type === 'stream' ? (
-          <div className="w-full h-full">
-            <StreamPlayer
-              streamUrl={selectedSource.streamUrl}
-              onVideoReady={setStreamVideoEl}
-            />
-          </div>
+          <StreamPlayer
+            key={selectedSource.streamUrl}
+            streamUrl={selectedSource.streamUrl}
+            onVideoReady={setStreamVideoEl}
+            onStatusChange={setStreamStatus}
+          />
         ) : (
           <video
             ref={webcamVideoRef}
             autoPlay
             muted
             playsInline
-            controls={false}
-            className="w-full h-full object-contain bg-black"
+            className="h-full w-full bg-black object-contain"
           />
         )}
+
+        <div className={'rfa-stream-state state-' + streamStatus}>
+          {selectedSource?.type === 'stream'
+            ? streamStatus.toUpperCase()
+            : 'LOCAL CAMERA'}
+        </div>
       </div>
 
-      <div className="flex gap-2 justify-center">
-        <button
-          type="button"
-          onClick={handleCapture}
-          className="px-6 py-2 rounded bg-red-600 text-white text-sm font-bold hover:bg-red-500"
-        >
-          Capture
-        </button>
-
-        <button
-          type="button"
-          onClick={handleStop}
-          className="px-6 py-2 rounded bg-slate-600 text-white text-sm font-semibold hover:bg-slate-500"
-        >
-          Stop
+      <div className="rfa-camera-footer">
+        <span>
+          Network base: <strong>{STREAM_BASE_URL}</strong>
+        </span>
+        <button type="button" onClick={captureFrame} className="rfa-capture-button">
+          Capture Target
         </button>
       </div>
     </div>

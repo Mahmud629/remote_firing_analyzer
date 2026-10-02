@@ -1,88 +1,82 @@
-import { useCallback } from 'react';
+'use client';
 
-const SESSIONS_KEY = 'firing-analyzer-sessions';
+import { useCallback, useEffect, useState } from 'react';
+import { SESSION_STORAGE_KEY } from '@/lib/config';
+import type { SavedSession } from '@/types';
 
-type SavedSession = {
-  id: string;
-  firerInfo: any;
-  results: any;
-  savedAt: string;
-  targetImageBase64?: string;
-};
+const MAX_INLINE_IMAGE_LENGTH = 220_000;
+
+function sanitizeSession(session: SavedSession): SavedSession {
+  const image =
+    session.targetImageBase64 &&
+    session.targetImageBase64.length <= MAX_INLINE_IMAGE_LENGTH
+      ? session.targetImageBase64
+      : undefined;
+
+  return {
+    ...session,
+    targetImageBase64: image,
+  };
+}
+
+function readSessions(): SavedSession[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? (parsed as SavedSession[]) : [];
+  } catch (error) {
+    console.error('Unable to read saved sessions:', error);
+    return [];
+  }
+}
 
 export function useSessions() {
-  const getSessions = useCallback((): SavedSession[] => {
-    if (typeof window === 'undefined') return [];
+  const [sessions, setSessions] = useState<SavedSession[]>([]);
 
+  useEffect(() => {
+    setSessions(readSessions());
+  }, []);
+
+  const persist = useCallback((next: SavedSession[]) => {
     try {
-      const stored = localStorage.getItem(SESSIONS_KEY);
-      return stored ? JSON.parse(stored) : [];
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      setSessions(next);
+      return true;
     } catch (error) {
-      console.error('Error reading sessions from localStorage:', error);
-      return [];
+      console.error('Unable to save sessions:', error);
+      return false;
     }
   }, []);
 
-  const saveSession = useCallback((session: SavedSession) => {
-    if (typeof window === 'undefined') return false;
+  const getSessions = useCallback(() => sessions, [sessions]);
 
-    try {
-      const sessions = getSessions();
+  const saveSession = useCallback(
+    (session: SavedSession) => {
+      const safe = sanitizeSession(session);
+      const withoutDuplicate = sessions.filter((item) => item.id !== safe.id);
+      return persist([safe, ...withoutDuplicate].slice(0, 100));
+    },
+    [persist, sessions],
+  );
 
-      // Remove heavy image data to avoid localStorage quota error
-      const safeSession: SavedSession = {
-        ...session,
-        targetImageBase64: undefined,
-      };
-
-      sessions.push(safeSession);
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-      return true;
-    } catch (error) {
-      console.error('Error saving session to localStorage:', error);
-
-      try {
-        // fallback: save only essential data
-        const sessions = getSessions();
-        const fallbackSession: SavedSession = {
-          id: session.id,
-          firerInfo: session.firerInfo,
-          results: session.results,
-          savedAt: session.savedAt,
-        };
-
-        sessions.push(fallbackSession);
-        localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-        return true;
-      } catch (fallbackError) {
-        console.error('Fallback save also failed:', fallbackError);
-        return false;
-      }
-    }
-  }, [getSessions]);
-
-  const deleteSession = useCallback((id: string) => {
-    if (typeof window === 'undefined') return;
-
-    try {
-      const sessions = getSessions().filter((s) => s.id !== id);
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-    } catch (error) {
-      console.error('Error deleting session:', error);
-    }
-  }, [getSessions]);
+  const deleteSession = useCallback(
+    (id: string) => persist(sessions.filter((item) => item.id !== id)),
+    [persist, sessions],
+  );
 
   const clearAllSessions = useCallback(() => {
-    if (typeof window === 'undefined') return;
-
-    try {
-      localStorage.removeItem(SESSIONS_KEY);
-    } catch (error) {
-      console.error('Error clearing sessions:', error);
-    }
+    if (typeof window === 'undefined') return false;
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    setSessions([]);
+    return true;
   }, []);
 
   return {
+    sessions,
     getSessions,
     saveSession,
     deleteSession,

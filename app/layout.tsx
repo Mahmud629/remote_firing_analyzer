@@ -1,45 +1,31 @@
-import type { Metadata } from 'next'
-import { Roboto_Mono, Roboto_Condensed } from 'next/font/google'
-import { Analytics } from '@vercel/analytics/next'
-import './globals.css'
-
-const robotoCondensed = Roboto_Condensed({ subsets: ["latin"], weight: ['400', '700', '900'] });
-const robotoMono = Roboto_Mono({ subsets: ["latin"] });
+import type { Metadata, Viewport } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Remote Firing Analyzer | BD-08 Rifle Zeroing',
-  description: 'Professional ballistic data analysis tool for military rifle sight zeroing',
-  generator: 'v0.app',
+  title: 'Remote Firing Analyzer',
+  description:
+    'Digital target analysis workspace with manual marking and ML-ready automatic bullet detection.',
+  applicationName: 'Remote Firing Analyzer',
   icons: {
-    icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
-    ],
+    icon: '/icon.svg',
     apple: '/apple-icon.png',
   },
-}
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#07111f',
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`font-sans antialiased ${robotoCondensed.className}`}>
-        {children}
-        <Analytics />
-      </body>
+      <body>{children}</body>
     </html>
-  )
+  );
 }

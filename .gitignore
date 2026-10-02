@@ -3,9 +3,16 @@ __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
 
-# Common ignores
+# Dependencies and builds
 node_modules/
 .next/
+out/
+
+# Local configuration
+.env
 .env*.local
 .DS_Store
 .vercel
+
+# Firebase generated cache
+.firebase/
