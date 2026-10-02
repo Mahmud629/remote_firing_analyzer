@@ -11,10 +11,24 @@ import {
   type ImageCanvasHandle,
 } from './ImageCanvas';
 import { analyzeZeroing, calculateDistance } from '@/lib/calculations';
-import { detectBulletHoles } from '@/lib/ml/detector';
+import {
+  detectBulletHoles,
+  DetectorNotConfiguredError,
+} from '@/lib/ml/detector';
+import {
+  detectOuterTargetCircle,
+  mapNormalizedPointToSource,
+  normalizeTargetImage,
+} from '@/lib/vision/autoCalibration';
+import {
+  getDatabaseMode,
+  saveSessionToCloud,
+} from '@/lib/db/firebase';
 import { generateFiringReport } from '@/lib/exportReport';
 import { useSessions } from '@/hooks/useSessions';
+import { ZEROING_PROFILE } from '@/lib/config';
 import type {
+  DetectedCircle,
   FirerInfo,
   MarkedPoint,
   MarkerType,
@@ -28,6 +42,8 @@ import type {
 
 type InputMode = 'upload' | 'camera';
 type MlState = 'idle' | 'running' | 'success' | 'error';
+type CalibrationState = 'idle' | 'running' | 'success' | 'error';
+type SourceType = 'upload' | 'camera';
 
 function markerId(prefix: string) {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -44,6 +60,7 @@ export function AnalyzerContainer() {
   const canvasRef = useRef<ImageCanvasHandle>(null);
 
   const [inputMode, setInputMode] = useState<InputMode>('upload');
+  const [sourceType, setSourceType] = useState<SourceType>('upload');
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [markers, setMarkers] = useState<MarkedPoint[]>([]);
   const [overlayMarkers, setOverlayMarkers] = useState<MarkedPoint[]>([]);
@@ -52,6 +69,11 @@ export function AnalyzerContainer() {
   const [hoveredMarkerId, setHoveredMarkerId] = useState<string | null>(null);
   const [scalePixels, setScalePixels] = useState<number | null>(null);
   const [scaleInches, setScaleInches] = useState<number | null>(null);
+  const [calibrationCircle, setCalibrationCircle] =
+    useState<DetectedCircle | null>(null);
+  const [calibrationState, setCalibrationState] =
+    useState<CalibrationState>('idle');
+  const [calibrationInfo, setCalibrationInfo] = useState('');
   const [results, setResults] = useState<ZeroingResults | null>(null);
   const [unit, setUnit] = useState<Unit>('inches');
   const [markingMode, setMarkingMode] = useState<MarkingMode>('manual');
@@ -70,10 +92,8 @@ export function AnalyzerContainer() {
     range: 100,
   });
 
-  const {
-    sessions,
-    saveSession,
-  } = useSessions();
+  const { sessions, saveSession } = useSessions();
+  const databaseMode = getDatabaseMode();
 
   const bulletMarkers = useMemo(
     () => markers.filter((marker) => marker.type === 'bullet'),
@@ -130,6 +150,9 @@ export function AnalyzerContainer() {
     setHoveredMarkerId(null);
     setScalePixels(null);
     setScaleInches(null);
+    setCalibrationCircle(null);
+    setCalibrationState('idle');
+    setCalibrationInfo('');
     setResults(null);
     setMarkingMode('manual');
     setMlState('idle');
@@ -137,18 +160,157 @@ export function AnalyzerContainer() {
     setWorkspaceSaved(false);
   }, []);
 
-  const setTargetImage = useCallback(
-    (image: string) => {
-      setImageSrc(image);
-      resetTargetState();
-    },
-    [resetTargetState],
-  );
-
   const resetWorkspace = useCallback(() => {
     setImageSrc(null);
     resetTargetState();
   }, [resetTargetState]);
+
+  const detectBulletsForImage = useCallback(
+    async (
+      image: string,
+      circle: DetectedCircle,
+      baseMarkers: MarkedPoint[],
+    ) => {
+      setMarkingMode('auto');
+      setCurrentMode(null);
+      setMlState('running');
+      setMlInfo('Normalizing target and running ML model…');
+      setWorkspaceSaved(false);
+
+      try {
+        const normalized = await normalizeTargetImage(image, circle);
+        const detected = await detectBulletHoles(normalized.imageDataUrl);
+
+        const mlMarkers: MarkedPoint[] = detected.detections.map(
+          (detection, index) => {
+            const sourcePoint = mapNormalizedPointToSource(
+              detection,
+              normalized.transform,
+            );
+
+            return {
+              ...sourcePoint,
+              id: markerId('ml-' + (index + 1)),
+              type: 'bullet',
+              source: 'ml',
+              confidence: detection.confidence,
+            };
+          },
+        );
+
+        const next = [
+          ...baseMarkers.filter((marker) => marker.type !== 'bullet'),
+          ...mlMarkers,
+        ];
+
+        setMarkers(next);
+        setMlState('success');
+        setMlInfo(
+          String(mlMarkers.length) +
+            ' detected' +
+            (detected.inferenceMs ? ' · ' + detected.inferenceMs + ' ms' : ''),
+        );
+        analyze(
+          next,
+          circle.radiusPixels,
+          circle.physicalRadiusInches,
+        );
+      } catch (error) {
+        if (error instanceof DetectorNotConfiguredError) {
+          setMarkingMode('manual');
+          setMlState('idle');
+          setMlInfo('ML service is not configured yet. Manual marking remains available.');
+          setCurrentMode('bullet');
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : 'Automatic detection failed.';
+        setMlState('error');
+        setMlInfo(message);
+      }
+    },
+    [analyze],
+  );
+
+  const processTargetImage = useCallback(
+    async (
+      image: string,
+      source: SourceType,
+      detectBulletsAfterCalibration: boolean,
+    ) => {
+      resetTargetState();
+      setImageSrc(image);
+      setSourceType(source);
+      setCalibrationState('running');
+      setCalibrationInfo('Detecting outer target circle…');
+
+      try {
+        const circle = await detectOuterTargetCircle(image);
+
+        setCalibrationCircle(circle);
+        setScalePixels(circle.radiusPixels);
+        setScaleInches(circle.physicalRadiusInches);
+        setCalibrationState('success');
+        setCalibrationInfo(
+          'Outer circle detected · radius ' +
+            circle.radiusPixels.toFixed(1) +
+            ' px · confidence ' +
+            Math.round(circle.confidence * 100) +
+            '%',
+        );
+
+        if (detectBulletsAfterCalibration) {
+          await detectBulletsForImage(image, circle, []);
+        } else {
+          setCurrentMode('bullet');
+        }
+      } catch (error) {
+        setCalibrationState('error');
+        setCalibrationInfo(
+          error instanceof Error
+            ? error.message
+            : 'Automatic calibration failed.',
+        );
+        setCurrentMode('calibration');
+      }
+    },
+    [detectBulletsForImage, resetTargetState],
+  );
+
+  const rerunAutoCalibration = useCallback(async () => {
+    if (!imageSrc) return;
+
+    setCalibrationState('running');
+    setCalibrationInfo('Re-detecting outer target circle…');
+
+    try {
+      const circle = await detectOuterTargetCircle(imageSrc);
+      setCalibrationCircle(circle);
+      setScalePixels(circle.radiusPixels);
+      setScaleInches(circle.physicalRadiusInches);
+      setCalibrationState('success');
+      setCalibrationInfo(
+        'Outer circle detected · radius ' +
+          circle.radiusPixels.toFixed(1) +
+          ' px · confidence ' +
+          Math.round(circle.confidence * 100) +
+          '%',
+      );
+      analyze(
+        markers,
+        circle.radiusPixels,
+        circle.physicalRadiusInches,
+      );
+    } catch (error) {
+      setCalibrationState('error');
+      setCalibrationInfo(
+        error instanceof Error
+          ? error.message
+          : 'Automatic calibration failed.',
+      );
+    }
+  }, [analyze, imageSrc, markers]);
 
   const readImageFile = useCallback(
     (file: File) => {
@@ -160,12 +322,12 @@ export function AnalyzerContainer() {
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result === 'string') {
-          setTargetImage(reader.result);
+          void processTargetImage(reader.result, 'upload', false);
         }
       };
       reader.readAsDataURL(file);
     },
-    [setTargetImage],
+    [processTargetImage],
   );
 
   const handleMarkerAdd = useCallback(
@@ -189,6 +351,10 @@ export function AnalyzerContainer() {
       }
 
       if (type === 'bullet') {
+        if (bulletCount >= ZEROING_PROFILE.requiredShots) {
+          return;
+        }
+
         const next = [
           ...markers,
           {
@@ -224,16 +390,15 @@ export function AnalyzerContainer() {
 
       if (calibration.length === 2) {
         const entered = window.prompt(
-          'Enter the actual distance between the two calibration points in inches:',
+          'Automatic calibration failed. Enter the actual distance between these two fallback points in inches:',
           '1',
         );
         const knownInches = Number(entered);
 
         if (!Number.isFinite(knownInches) || knownInches <= 0) {
-          const reverted = next.filter(
-            (marker) => marker.id !== nextCalibrationMarker.id,
+          setMarkers(
+            next.filter((marker) => marker.id !== nextCalibrationMarker.id),
           );
-          setMarkers(reverted);
           return;
         }
 
@@ -243,13 +408,16 @@ export function AnalyzerContainer() {
           return;
         }
 
+        setCalibrationCircle(null);
         setScalePixels(pixels);
         setScaleInches(knownInches);
-        setCurrentMode(null);
+        setCalibrationState('success');
+        setCalibrationInfo('Manual fallback calibration active.');
+        setCurrentMode('bullet');
         analyze(next, pixels, knownInches);
       }
     },
-    [analyze, calibrationMarkers.length, markers],
+    [analyze, bulletCount, calibrationMarkers.length, markers],
   );
 
   const handleMarkerRemove = useCallback(
@@ -262,25 +430,30 @@ export function AnalyzerContainer() {
       setMarkers(next);
       setWorkspaceSaved(false);
 
-      if (removed?.type === 'calibration') {
+      if (removed?.type === 'calibration' && !calibrationCircle) {
         setScalePixels(null);
         setScaleInches(null);
         setResults(null);
+        setCalibrationState('error');
+        setCalibrationInfo('Fallback calibration is incomplete.');
         return;
       }
 
       analyze(next);
     },
-    [analyze, markers],
+    [analyze, calibrationCircle, markers],
   );
 
-  const startCalibration = () => {
+  const startManualCalibration = () => {
     setMarkers((current) =>
       current.filter((marker) => marker.type !== 'calibration'),
     );
+    setCalibrationCircle(null);
     setScalePixels(null);
     setScaleInches(null);
     setResults(null);
+    setCalibrationState('idle');
+    setCalibrationInfo('Manual fallback: mark two known points.');
     setCurrentMode('calibration');
   };
 
@@ -292,47 +465,14 @@ export function AnalyzerContainer() {
   };
 
   const runAutoDetection = useCallback(async () => {
-    if (!imageSrc) return;
-
-    setMarkingMode('auto');
-    setCurrentMode(null);
-    setMlState('running');
-    setMlInfo('Running model…');
-    setWorkspaceSaved(false);
-
-    try {
-      const detected = await detectBulletHoles(imageSrc);
-      const mlMarkers: MarkedPoint[] = detected.detections.map(
-        (detection, index) => ({
-          x: detection.x,
-          y: detection.y,
-          id: markerId('ml-' + (index + 1)),
-          type: 'bullet',
-          source: 'ml',
-          confidence: detection.confidence,
-        }),
-      );
-
-      const next = [
-        ...markers.filter((marker) => marker.type !== 'bullet'),
-        ...mlMarkers,
-      ];
-
-      setMarkers(next);
-      setMlState('success');
-      setMlInfo(
-        String(mlMarkers.length) +
-          ' detected' +
-          (detected.inferenceMs ? ' · ' + detected.inferenceMs + ' ms' : ''),
-      );
-      analyze(next);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Automatic detection failed.';
-      setMlState('error');
-      setMlInfo(message);
-    }
-  }, [analyze, imageSrc, markers]);
+    if (!imageSrc || !calibrationCircle) return;
+    await detectBulletsForImage(imageSrc, calibrationCircle, markers);
+  }, [
+    calibrationCircle,
+    detectBulletsForImage,
+    imageSrc,
+    markers,
+  ]);
 
   const clearBullets = () => {
     const next = markers.filter((marker) => marker.type !== 'bullet');
@@ -351,7 +491,7 @@ export function AnalyzerContainer() {
   };
 
   const freezeCurrentGroup = () => {
-    if (!bulletMarkers.length) return;
+    if (bulletCount !== ZEROING_PROFILE.requiredShots) return;
 
     const frozen = bulletMarkers.map((marker, index) => ({
       ...marker,
@@ -408,20 +548,41 @@ export function AnalyzerContainer() {
       firerInfo,
       results,
       markingMode,
+      calibration: calibrationCircle,
+      sourceType,
       savedAt: new Date().toISOString(),
       targetImageBase64: canvasRef.current?.captureCanvas() || undefined,
     };
-  }, [firerInfo, markingMode, results]);
+  }, [
+    calibrationCircle,
+    firerInfo,
+    markingMode,
+    results,
+    sourceType,
+  ]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const session = currentSession();
     if (!session) return;
 
-    if (saveSession(session)) {
-      setWorkspaceSaved(true);
-      alert('Session saved.');
-    } else {
+    const localSaved = saveSession(session);
+    if (!localSaved) {
       alert('Session could not be saved in this browser.');
+      return;
+    }
+
+    setWorkspaceSaved(true);
+
+    try {
+      const cloud = await saveSessionToCloud(session);
+      if (cloud.mode === 'cloud' && cloud.saved) {
+        alert('Session and individual record saved to the database.');
+      } else {
+        alert('Session saved locally. Configure Firebase to enable the central database.');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Session saved locally, but the cloud database save failed.');
     }
   };
 
@@ -432,7 +593,7 @@ export function AnalyzerContainer() {
 
   const canSave = Boolean(
     results &&
-      bulletCount === 5 &&
+      bulletCount === ZEROING_PROFILE.requiredShots &&
       poaMarker &&
       isCalibrated,
   );
@@ -440,7 +601,7 @@ export function AnalyzerContainer() {
   const activeStage: WorkflowStage = useMemo(() => {
     if (!imageSrc) return 'source';
     if (!isCalibrated) return 'calibration';
-    if (bulletCount !== 5) return 'marking';
+    if (bulletCount !== ZEROING_PROFILE.requiredShots) return 'marking';
     if (!poaMarker) return 'aim';
     if (!results) return 'analysis';
     if (!workspaceSaved) return 'review';
@@ -458,7 +619,7 @@ export function AnalyzerContainer() {
     const stages: WorkflowStage[] = [];
     if (imageSrc) stages.push('source');
     if (isCalibrated) stages.push('calibration');
-    if (bulletCount === 5) stages.push('marking');
+    if (bulletCount === ZEROING_PROFILE.requiredShots) stages.push('marking');
     if (poaMarker) stages.push('aim');
     if (results && results.status !== 'INCOMPLETE') stages.push('analysis');
     if (canSave) stages.push('review');
@@ -479,6 +640,7 @@ export function AnalyzerContainer() {
       <AppHeader
         sessionCount={sessions.length}
         markingMode={markingMode}
+        databaseMode={databaseMode}
         onReset={resetWorkspace}
       />
 
@@ -496,7 +658,7 @@ export function AnalyzerContainer() {
               <span className="rfa-eyebrow">TARGET WORKSPACE</span>
               <h2>
                 {imageSrc
-                  ? 'Analyze the current target'
+                  ? 'Auto-calibrated target analysis'
                   : 'Start with a target image'}
               </h2>
             </div>
@@ -504,9 +666,15 @@ export function AnalyzerContainer() {
             {imageSrc && (
               <div className="rfa-workspace-badges">
                 <span className={isCalibrated ? 'is-ok' : ''}>
-                  {isCalibrated ? 'CALIBRATED' : 'NOT CALIBRATED'}
+                  {calibrationState === 'running'
+                    ? 'CALIBRATING…'
+                    : isCalibrated
+                      ? calibrationCircle
+                        ? 'AUTO CALIBRATED'
+                        : 'MANUAL CALIBRATED'
+                      : 'NOT CALIBRATED'}
                 </span>
-                <span>{bulletCount} / 5 SHOTS</span>
+                <span>{bulletCount} / {ZEROING_PROFILE.requiredShots} SHOTS</span>
               </div>
             )}
           </div>
@@ -550,10 +718,16 @@ export function AnalyzerContainer() {
                   />
                   <div className="rfa-drop-icon">◎</div>
                   <strong>Drop target image here</strong>
-                  <span>or click to browse JPG / PNG</span>
+                  <span>
+                    Outer-circle calibration starts automatically after loading.
+                  </span>
                 </label>
               ) : (
-                <CameraCapture onCapture={setTargetImage} />
+                <CameraCapture
+                  onCapture={(image) => {
+                    void processTargetImage(image, 'camera', true);
+                  }}
+                />
               )}
             </div>
           ) : (
@@ -561,15 +735,12 @@ export function AnalyzerContainer() {
               <div className="rfa-command-bar">
                 <button
                   type="button"
-                  className={
-                    currentMode === 'calibration'
-                      ? 'command is-active'
-                      : 'command'
-                  }
-                  onClick={startCalibration}
+                  className="command"
+                  disabled={calibrationState === 'running'}
+                  onClick={() => void rerunAutoCalibration()}
                 >
                   <span>01</span>
-                  Calibrate
+                  Re-detect Circle
                 </button>
 
                 <button
@@ -593,8 +764,11 @@ export function AnalyzerContainer() {
                       ? 'command command-auto is-active'
                       : 'command command-auto'
                   }
-                  disabled={!isCalibrated || mlState === 'running'}
-                  onClick={runAutoDetection}
+                  disabled={
+                    !calibrationCircle ||
+                    mlState === 'running'
+                  }
+                  onClick={() => void runAutoDetection()}
                 >
                   <span>AI</span>
                   {mlState === 'running' ? 'Detecting…' : 'Auto Detect'}
@@ -607,7 +781,10 @@ export function AnalyzerContainer() {
                       ? 'command is-active'
                       : 'command'
                   }
-                  disabled={!isCalibrated || bulletCount !== 5}
+                  disabled={
+                    !isCalibrated ||
+                    bulletCount !== ZEROING_PROFILE.requiredShots
+                  }
                   onClick={() => setCurrentMode('poa')}
                 >
                   <span>03</span>
@@ -616,6 +793,13 @@ export function AnalyzerContainer() {
 
                 <div className="rfa-command-spacer" />
 
+                <button
+                  type="button"
+                  className="rfa-compact-command"
+                  onClick={startManualCalibration}
+                >
+                  Manual Cal
+                </button>
                 <button
                   type="button"
                   className="rfa-compact-command"
@@ -636,7 +820,9 @@ export function AnalyzerContainer() {
                   type="button"
                   className="rfa-compact-command"
                   onClick={freezeCurrentGroup}
-                  disabled={bulletCount !== 5}
+                  disabled={
+                    bulletCount !== ZEROING_PROFILE.requiredShots
+                  }
                 >
                   Next Group
                 </button>
@@ -658,6 +844,25 @@ export function AnalyzerContainer() {
                 </button>
               </div>
 
+              {calibrationState === 'running' && (
+                <div className="rfa-alert">
+                  <strong>Auto Calibration:</strong> {calibrationInfo}
+                </div>
+              )}
+
+              {calibrationState === 'success' && calibrationInfo && (
+                <div className="rfa-alert is-success">
+                  <strong>Calibration complete.</strong> {calibrationInfo}
+                </div>
+              )}
+
+              {calibrationState === 'error' && (
+                <div className="rfa-alert is-error">
+                  <strong>Auto Calibration:</strong> {calibrationInfo}
+                  {' '}Use Re-detect Circle or Manual Cal.
+                </div>
+              )}
+
               {mlState === 'error' && (
                 <div className="rfa-alert is-error">
                   <strong>Auto Detect:</strong> {mlInfo}
@@ -666,9 +871,15 @@ export function AnalyzerContainer() {
 
               {mlState === 'success' && (
                 <div className="rfa-alert is-success">
-                  <strong>Auto Detect complete.</strong> {mlInfo}. Click any
+                  <strong>Auto Detect complete.</strong> {mlInfo}. Click an
                   incorrect ML mark to remove it, or choose Manual Mark to add a
                   missed shot.
+                </div>
+              )}
+
+              {mlState === 'idle' && mlInfo && (
+                <div className="rfa-alert">
+                  <strong>Auto Detect:</strong> {mlInfo}
                 </div>
               )}
 
@@ -686,6 +897,7 @@ export function AnalyzerContainer() {
                   groupingPair={results?.groupingPixelPair || null}
                   mpiPoint={mpiPoint}
                   poaPoint={poaMarker}
+                  calibrationCircle={calibrationCircle}
                 />
               </div>
 
@@ -694,11 +906,10 @@ export function AnalyzerContainer() {
                   <span><i className="manual" /> Manual shot</span>
                   <span><i className="ml" /> ML detected</span>
                   <span><i className="poa" /> Point of aim</span>
-                  <span><i className="cal" /> Calibration</span>
+                  <span><i className="cal" /> Auto-cal circle</span>
                 </div>
                 <div className="rfa-tip">
-                  Tip: zoom in for precise manual correction. Click a mark to
-                  remove it.
+                  Camera capture: circle calibration runs first, then ML detection.
                 </div>
               </div>
             </>
@@ -711,7 +922,7 @@ export function AnalyzerContainer() {
           markingMode={markingMode}
           mlInfo={markingMode === 'auto' ? mlInfo : undefined}
           onUnitChange={setUnit}
-          onSave={handleSave}
+          onSave={() => void handleSave()}
           onReport={handleReport}
           canSave={canSave}
         />
