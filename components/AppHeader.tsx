@@ -2,16 +2,19 @@
 
 import type { MarkingMode } from '@/types';
 import { APP_NAME, APP_VERSION } from '@/lib/config';
+import type { DatabaseMode } from '@/lib/db/firebase';
 
 interface AppHeaderProps {
   sessionCount: number;
   markingMode: MarkingMode;
+  databaseMode: DatabaseMode;
   onReset: () => void;
 }
 
 export function AppHeader({
   sessionCount,
   markingMode,
+  databaseMode,
   onReset,
 }: AppHeaderProps) {
   return (
@@ -21,7 +24,7 @@ export function AppHeader({
         <div>
           <div className="rfa-kicker">DIGITAL TARGET ANALYSIS</div>
           <h1>{APP_NAME}</h1>
-          <p>Layered firing analysis workspace · v{APP_VERSION}</p>
+          <p>Automatic calibration · ML-ready detection · database records · v{APP_VERSION}</p>
         </div>
       </div>
 
@@ -32,6 +35,9 @@ export function AppHeader({
         </div>
         <div className="rfa-mode-chip">
           {markingMode === 'auto' ? 'ML AUTO DETECT' : 'MANUAL MARKING'}
+        </div>
+        <div className="rfa-session-chip">
+          DB: {databaseMode === 'cloud' ? 'FIRESTORE' : 'LOCAL'}
         </div>
         <div className="rfa-session-chip">{sessionCount} SAVED</div>
         <button type="button" onClick={onReset} className="rfa-reset-button">
