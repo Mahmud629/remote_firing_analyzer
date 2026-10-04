@@ -1,0 +1,43 @@
+# MediaMTX configuration for Remote Firing Analyzer
+#
+# Put this file next to mediamtx.exe (or the mediamtx binary) and start MediaMTX.
+# Cameras are then added from the app: Settings > CCTV cameras > Add camera.
+# For a permanent setup you can also export a file with your cameras from that page.
+logLevel: info
+
+# Control API: lets the app add and check cameras
+api: yes
+apiAddress: :9997
+apiAllowOrigins: ['*']   # older MediaMTX: apiAllowOrigin: '*'
+
+# HLS: the browser plays cameras from here
+hls: yes
+hlsAlwaysRemux: yes
+hlsAddress: :8888
+hlsAllowOrigins: ['*']   # older MediaMTX: hlsAllowOrigin: '*'
+hlsVariant: fmp4
+hlsSegmentDuration: 1s
+
+rtsp: yes
+moq: no
+webrtc: no
+srt: no
+rtmp: no
+
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: read
+      - action: playback
+  # the Control API only answers this computer
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: api
+      - action: publish
+
+paths:
+  all_others:

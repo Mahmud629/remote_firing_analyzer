@@ -1,0 +1,12 @@
+logLevel: info
+api: no
+hls: no
+rtmp: no
+webrtc: no
+srt: no
+moq: no
+rtspAddress: :8555
+rtpAddress: :8100
+rtcpAddress: :8101
+paths:
+  all_others:

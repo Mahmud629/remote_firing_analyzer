@@ -1,0 +1,217 @@
+@import 'tailwindcss';
+
+@custom-variant tall (@media (min-height: 820px));
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* ---- Tokens: navy command post, brass accents, signal colours -------- */
+/* (token names are historical: "olive" is the primary accent)             */
+:root {
+  --c-paper: #edf1f6; /* app background */
+  --c-sheet: #ffffff; /* panels */
+  --c-sunk: #e4e9f0; /* inset fields */
+  --c-ink: #0f1b2d;
+  --c-muted: #5a6a80;
+  --c-rule: #d3dbe6;
+  --c-olive: #c8961e; /* primary: brass */
+  --c-olive-ink: #1a1305;
+  --c-olive-soft: #f7ecd0;
+  --c-hit: #ffd400;
+  --c-aim: #0b74d1;
+  --c-mpi: #e11d48;
+  --c-ok: #1f9d55;
+  --c-warn: #c27400;
+  --c-bad: #d32f45;
+  --c-scope: #060b14; /* viewfinder behind the target */
+  --c-ring: #22c3ff;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --c-paper: #0a1220;
+    --c-sheet: #101b2e;
+    --c-sunk: #0c1627;
+    --c-ink: #e6edf7;
+    --c-muted: #8796ae;
+    --c-rule: #1e2b42;
+    --c-olive: #e0b03a;
+    --c-olive-ink: #1a1305;
+    --c-olive-soft: #2a2312;
+    --c-aim: #4ab4ff;
+    --c-mpi: #ff4d6d;
+    --c-ok: #3ddc84;
+    --c-warn: #ffb020;
+    --c-bad: #ff5468;
+    --c-scope: #04070d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --c-paper: #0a1220;
+  --c-sheet: #101b2e;
+  --c-sunk: #0c1627;
+  --c-ink: #e6edf7;
+  --c-muted: #8796ae;
+  --c-rule: #1e2b42;
+  --c-olive: #e0b03a;
+  --c-olive-ink: #1a1305;
+  --c-olive-soft: #2a2312;
+  --c-aim: #4ab4ff;
+  --c-mpi: #ff4d6d;
+  --c-ok: #3ddc84;
+  --c-warn: #ffb020;
+  --c-bad: #ff5468;
+  --c-scope: #04070d;
+  color-scheme: dark;
+}
+
+/* layout heights: banner grows on tall screens, footer is fixed */
+:root {
+  --header-h: 56px;
+  --footer-h: 36px;
+}
+@media (min-width: 1024px) {
+  :root {
+    --header-h: 64px;
+  }
+}
+@media (min-width: 1024px) and (min-height: 820px) {
+  :root {
+    --header-h: 92px;
+  }
+}
+
+/* camouflage banner (same in light and dark themes) */
+.camo-bg {
+  background-color: #17221a;
+  background-image:
+    radial-gradient(ellipse 70px 34px at 10% 28%, #2c4326 96%, transparent 100%),
+    radial-gradient(ellipse 48px 40px at 34% 74%, #3b3a22 96%, transparent 100%),
+    radial-gradient(ellipse 90px 30px at 58% 26%, #223420 96%, transparent 100%),
+    radial-gradient(ellipse 52px 36px at 82% 70%, #34482b 96%, transparent 100%),
+    radial-gradient(ellipse 62px 26px at 72% 12%, #453d26 96%, transparent 100%),
+    radial-gradient(ellipse 44px 34px at 22% 92%, #2a3a20 96%, transparent 100%),
+    radial-gradient(ellipse 58px 28px at 92% 38%, #1f2e1d 96%, transparent 100%);
+  background-size:
+    360px 100%,
+    360px 100%,
+    360px 100%,
+    360px 100%,
+    510px 100%,
+    510px 100%,
+    510px 100%;
+}
+
+/* tagline scrolling from right to left */
+.marquee {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.marquee > span {
+  display: inline-block;
+  padding-left: 100%;
+  animation: marquee 17s linear infinite;
+}
+.marquee:hover > span {
+  animation-play-state: paused;
+}
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee > span {
+    animation: none !important;
+    padding-left: 0;
+  }
+}
+
+/* viewfinder backdrop behind the target: faint range rings and cross lines */
+.scope-bg {
+  background-image:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.05) calc(50% - 0.5px), rgba(255, 255, 255, 0.05) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.05) calc(50% - 0.5px), rgba(255, 255, 255, 0.05) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 89px, rgba(255, 255, 255, 0.045) 89px 90px);
+}
+
+@theme inline {
+  --color-paper: var(--c-paper);
+  --color-sheet: var(--c-sheet);
+  --color-sunk: var(--c-sunk);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-rule: var(--c-rule);
+  --color-olive: var(--c-olive);
+  --color-olive-ink: var(--c-olive-ink);
+  --color-olive-soft: var(--c-olive-soft);
+  --color-hit: var(--c-hit);
+  --color-aim: var(--c-aim);
+  --color-mpi: var(--c-mpi);
+  --color-ok: var(--c-ok);
+  --color-warn: var(--c-warn);
+  --color-bad: var(--c-bad);
+  --color-scope: var(--c-scope);
+  --color-ring: var(--c-ring);
+  --font-sans: 'Barlow', 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-display: 'Barlow Condensed', 'Arial Narrow', 'Segoe UI', Arial, sans-serif;
+}
+
+html,
+body {
+  background: var(--c-paper);
+  color: var(--c-ink);
+}
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.num {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+:focus-visible {
+  outline: 2px solid var(--c-aim);
+  outline-offset: 2px;
+}
+dialog::backdrop {
+  background: rgb(10 12 10 / 0.55);
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+/* the one orchestrated motion: the ring settling when calibration locks */
+@keyframes ring-lock {
+  from {
+    stroke-width: var(--sw-from);
+    opacity: 0.4;
+  }
+  to {
+    stroke-width: var(--sw-to);
+    opacity: 1;
+  }
+}
+.ring-locked {
+  animation: ring-lock 420ms ease-out both;
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.toast-in {
+  animation: toast-in 180ms ease-out both;
+}

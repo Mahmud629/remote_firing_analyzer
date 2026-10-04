@@ -1,0 +1,77 @@
+import asyncio, time, re
+from playwright.async_api import async_playwright
+BASE='http://localhost:4173'
+async def toasts(page):
+    return [t.strip().replace('\n',' | ') for t in await page.locator('.toast-in').all_inner_texts()]
+async def main():
+    async with async_playwright() as p:
+        b = await p.chromium.launch()
+        ctx = await b.new_context(viewport={'width':1920,'height':1080}, color_scheme='dark', accept_downloads=True)
+        page = await ctx.new_page(); logs=[]
+        page.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
+        page.on('console', lambda m: m.type=='error' and logs.append(m.text))
+        await page.goto(BASE+'/')
+        await page.screenshot(path='v3-empty.png')
+        await page.set_input_files('input[type=file][accept="image/*"] >> nth=0', '/tmp/e2e/target.jpg')
+        await page.wait_for_selector('text=Bullet marks done', timeout=30000)
+        print('TOASTS 1:', await toasts(page))
+        await page.screenshot(path='v3-review.png')
+        # firer
+        await page.get_by_label('Firer').click()
+        await page.get_by_text('New firer').click()
+        dlg = page.locator('dialog[open]')
+        await dlg.get_by_label('Personal number').fill('BA-104233'); await dlg.get_by_label('Rank').fill('Corporal')
+        await dlg.get_by_label('Name').fill('Rahim Uddin'); await dlg.get_by_label('Unit', exact=True).fill('12 East Bengal'); await dlg.get_by_label('Sub unit / Coy').fill('A Coy')
+        await dlg.get_by_role('button', name='Add firer').click()
+        await page.wait_for_function("() => !document.querySelector('dialog[open]')")
+        await page.get_by_label('Weapon no').fill('BD08-55821')
+        await page.get_by_role('button', name='Save group 1').click()
+        await page.wait_for_selector('text=Group 1 saved', timeout=10000)
+        print('TOASTS 2:', await toasts(page))
+        await page.get_by_role('button', name='Next group').click()
+        await page.wait_for_timeout(500)
+        await page.set_input_files('input[type=file][accept="image/*"] >> nth=0', '/tmp/e2e/target_g2.jpg')
+        await page.wait_for_selector('text=from earlier groups ignored', timeout=30000)
+        print('TOASTS 3:', await toasts(page))
+        print('RESULT 2:', (await page.locator('section[aria-live=polite]').inner_text())[:200].replace('\n',' | '))
+        await page.wait_for_timeout(4000)
+        await page.screenshot(path='v3-group2.png')
+        await page.get_by_role('button', name='Save group 2').click()
+        await page.wait_for_selector('text=Group 2 saved', timeout=10000)
+        async with page.expect_download() as dl:
+            await page.get_by_role('button', name='PDF').click()
+        d = await dl.value; await d.save_as('/tmp/e2e/sheet.pdf'); print('PDF', d.suggested_filename)
+        # two-point calibration
+        await page.get_by_role('button', name=re.compile('^Two points')).click()
+        box = await page.locator('img[alt=Target]').bounding_box()
+        await page.mouse.click(box['x']+box['width']*0.30, box['y']+box['height']*0.5)
+        await page.mouse.click(box['x']+box['width']*0.70, box['y']+box['height']*0.5)
+        await page.wait_for_selector('dialog[open]')
+        await page.screenshot(path='v3-measure.png')
+        await page.locator('dialog[open]').get_by_label('Distance').fill('20')
+        await page.locator('dialog[open]').get_by_role('button', name='Calibrate').click()
+        await page.wait_for_timeout(500)
+        print('TOASTS 4:', await toasts(page))
+        # help
+        await page.get_by_role('button', name='How to use').click(); await page.wait_for_timeout(300)
+        await page.locator('dialog[open]').get_by_role('radio', name='Sessions').click()
+        await page.screenshot(path='v3-help.png'); await page.keyboard.press('Escape')
+        # settings + camera
+        await page.goto(BASE+'/settings/'); await page.wait_for_timeout(1500)
+        await page.get_by_role('button', name='Add camera').click()
+        dlg = page.locator('dialog[open]')
+        await dlg.get_by_label('Name', exact=True).fill('Lane 1'); await dlg.get_by_label('IP address').fill('192.168.1.64')
+        await dlg.get_by_label('Password', exact=True).fill('Pa$$:w0rd@1')
+        await page.screenshot(path='v3-camera-dialog.png')
+        await dlg.get_by_role('button', name='Save and connect').click()
+        await page.wait_for_selector('text=Camera connected', timeout=10000)
+        await page.wait_for_timeout(6500)
+        print('TOASTS 5:', await toasts(page))
+        await page.screenshot(path='v3-settings.png')
+        # records
+        await page.goto(BASE+'/records/'); await page.wait_for_timeout(800)
+        await page.get_by_text('Corporal Rahim Uddin').first.click(); await page.wait_for_timeout(800)
+        await page.screenshot(path='v3-records.png')
+        print('ERRORS:', logs[:10])
+        await b.close()
+asyncio.run(main())
