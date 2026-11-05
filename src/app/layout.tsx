@@ -11,7 +11,15 @@ import { AppShell } from '@/components/AppShell';
 export const metadata: Metadata = {
   title: 'Remote Firing Analyzer',
   description: 'Automatic target calibration, bullet-hole detection and rifle zeroing records.',
-  icons: { icon: '/bd-army-logo.png' },
+  applicationName: 'RFA',
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/rfa-tab.png', type: 'image/png', sizes: '192x192' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
 };
 
 export const viewport: Viewport = {

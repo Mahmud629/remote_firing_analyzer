@@ -20,7 +20,7 @@ export function buildSession(view: AnalysisView, meta: SessionMeta, rules: Rules
     offsetCm: a.offsetCm,
     correction: a.correction,
     classification: a.classification,
-    diagnostics: a.diagnostics.map(({ title, detail, advice }) => ({ title, detail, advice })),
+    diagnostics: a.diagnostics.map(({ title, detail, advice, error, remedy, ref }) => ({ title, detail, advice, error, remedy, ref })),
     shotsIn: view.shotsIn.map((p, i) => ({ ...p, source: shots[i]?.source ?? 'manual', confidence: shots[i]?.confidence })),
     poaIn: view.poaIn,
     calibration: { method: view.calibration.method, confidence: view.calibration.confidence, diameterIn: view.calibration.diameterIn },

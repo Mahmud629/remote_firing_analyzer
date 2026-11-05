@@ -41,21 +41,21 @@ class VisionClient {
     return this.worker;
   }
 
-  async run(source: ImageBitmapSource, opts: Options): Promise<VisionResponse> {
+  async run(source: ImageBitmapSource | null, opts: Options): Promise<VisionResponse> {
     const id = ++this.seq;
-    const bitmap = await createImageBitmap(source);
+    const bitmap = source ? await createImageBitmap(source) : undefined;
     const worker = this.ensure();
     if (!worker) {
       try {
-        const src = new CanvasFrameSource(bitmap, bitmap.width, bitmap.height);
+        const src = bitmap ? new CanvasFrameSource(bitmap, bitmap.width, bitmap.height) : null;
         return runPipeline(src, { ...opts, id });
       } finally {
-        bitmap.close();
+        bitmap?.close();
       }
     }
     return new Promise((resolve) => {
       this.pending.set(id, resolve);
-      worker.postMessage({ ...opts, id, bitmap } satisfies VisionRequest, [bitmap]);
+      worker.postMessage({ ...opts, id, bitmap } satisfies VisionRequest, bitmap ? [bitmap] : []);
     });
   }
 }

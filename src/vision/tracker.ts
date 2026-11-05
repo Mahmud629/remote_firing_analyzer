@@ -83,18 +83,23 @@ export class RingLock {
   }
 }
 
+/**
+ * The most typical of the steady detections (medoid). A whole detection is
+ * returned, never a mix of fields, because a calibration may carry a
+ * perspective model that must stay consistent with its ellipse.
+ */
 function medianCal(list: Calibration[]): Calibration {
-  const med = (f: (c: Calibration) => number) => {
-    const v = list.map(f).sort((x, y) => x - y);
-    return v[v.length >> 1];
-  };
-  return {
-    ...list[0],
-    center: { x: med((c) => c.center.x), y: med((c) => c.center.y) },
-    radiusX: med((c) => c.radiusX),
-    radiusY: med((c) => c.radiusY),
-    confidence: med((c) => c.confidence),
-  };
+  let best = list[0];
+  let bestCost = Infinity;
+  for (const a of list) {
+    let cost = 0;
+    for (const b of list) cost += Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) + Math.abs(a.radiusX - b.radiusX) + Math.abs(a.radiusY - b.radiusY);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = a;
+    }
+  }
+  return best;
 }
 
 /* -------------------------------------------------------------------------- */

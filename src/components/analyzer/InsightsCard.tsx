@@ -1,18 +1,28 @@
 'use client';
 import clsx from 'clsx';
 import { useState } from 'react';
-import { ChevronDown, Eye, EyeOff, Lightbulb } from 'lucide-react';
+import { BookOpen, ChevronDown, Eye, EyeOff, Lightbulb } from 'lucide-react';
 import { Panel } from '@/components/ui';
 import { useAnalyzer } from '@/state/analyzer';
 import { useSettings } from '@/state/settings';
-import { STATUS_LABEL, adviceFix, fmtLen } from '@/lib/format';
+import { STATUS_LABEL, fmtLen } from '@/lib/format';
+import type { PatternId } from '@/core/precis';
 import { useAnalysis } from './useAnalysis';
+import { PatternSketch, PrecisChartDialog } from './PrecisChart';
+import { PATTERN_BY_ID } from '@/core/precis';
 
-function Block({ label, children }: { label: string; children: React.ReactNode }) {
+/** Each tile has its own colour: blue = what the group looks like, amber = the error, green = the fix. */
+const TONES = {
+  aim: 'border-aim/40 bg-aim/10 text-aim',
+  warn: 'border-warn/40 bg-warn/10 text-warn',
+  ok: 'border-ok/40 bg-ok/10 text-ok',
+} as const;
+
+function Block({ label, tone, children }: { label: string; tone: keyof typeof TONES; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-md bg-sunk px-3 py-2 text-center">
-      <span className="text-xs font-medium uppercase tracking-wide text-muted">{label}</span>
-      <div className="text-sm font-medium leading-snug">{children}</div>
+    <div className={clsx('flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-md border border-l-4 px-3 py-2 text-center', TONES[tone])}>
+      <span className="text-xs font-semibold uppercase tracking-wide">{label}</span>
+      <div className="text-sm font-medium leading-snug text-ink">{children}</div>
     </div>
   );
 }
@@ -25,6 +35,7 @@ export function InsightsCard() {
   const toggleGroup = useAnalyzer((s) => s.toggleGroup);
   const unit = useSettings((s) => s.unit);
   const [open, setOpen] = useState(false);
+  const [chart, setChart] = useState(false);
   const own = session && session.firerId === firerId ? session : null;
   const a = view?.analysis;
 
@@ -42,22 +53,38 @@ export function InsightsCard() {
   }
 
   const diags = a?.diagnostics ?? [];
-  const types = diags.map((d) => d.title).slice(0, 3);
-  const error = a ? (a.reasons[0] ?? (a.status === 'ZEROED' ? 'No error' : '–')) : '–';
-  const advice = diags.find((d) => d.advice)?.advice;
+  // Précis shot group analysis: a good group (within the good-group limit) has no firer error;
+  // a wider group gets one pattern from Table 12-1 with its error and remedy.
+  const patterns = diags.filter((d) => d.pattern);
+  const quality = diags.find((d) => d.kind === 'quality');
+  const primary = diags.find((d) => d.error);
+  const good = !primary && quality?.title === 'Good group';
+  const types = primary ? [primary.title] : quality ? [quality.title] : [];
+  const error = !a
+    ? '–'
+    : primary
+      ? primary.error!
+      : good
+        ? a.status === 'ZEROED'
+          ? 'No error.'
+          : a.status === 'ADJUST'
+            ? `No firer error. Sights off by ${a.radialErrorCm!.toFixed(1)} cm.`
+            : 'No error so far.'
+        : (a.reasons[0] ?? '–');
   const fix = !a
     ? '–'
     : a.count > a.required
       ? 'Delete false marks, or press Next group.'
       : a.count < a.required
         ? 'Mark the missing bullets.'
-        : advice
-          ? adviceFix(advice)
+        : primary?.remedy
+          ? primary.remedy
           : a.status === 'ADJUST'
             ? 'Apply the sight correction.'
             : a.status === 'ZEROED'
-              ? 'None needed.'
+              ? 'None needed. Weapon zeroed.'
               : '–';
+  const highlight = patterns.map((d) => d.pattern!) as PatternId[];
 
   return (
     <Panel title="Group analysis" fill centered className="lg:min-h-[150px]">
@@ -79,15 +106,29 @@ export function InsightsCard() {
         )}
         {a && (
           <>
-            <Block label="Grouping type">{types.length ? types.join(' · ') : '–'}</Block>
-            <Block label="Error">{error}</Block>
-            <Block label="Solution">{fix}</Block>
-            {(diags.length > 0 || a.reasons.length > 0) && (
-              <>
-                <button type="button" onClick={() => setOpen(!open)} className="flex items-center justify-center gap-1.5 py-1 text-sm font-medium text-muted hover:text-ink" aria-expanded={open}>
+            <Block label="Grouping type" tone="aim">
+              <span className="flex items-center justify-center gap-2">
+                {primary?.pattern && <PatternSketch p={PATTERN_BY_ID[primary.pattern]} size={34} active />}
+                <span>{types.length ? types.join(' · ') : '–'}</span>
+              </span>
+            </Block>
+            <Block label="Error" tone={good && a.status !== 'WASHOUT' ? 'ok' : 'warn'}>{error}</Block>
+            <Block label="Solution" tone="ok">{fix}</Block>
+            <div className="flex items-center justify-center gap-4">
+              {(diags.length > 0 || a.reasons.length > 0) && (
+                <button type="button" onClick={() => setOpen(!open)} className="flex items-center gap-1.5 py-1 text-sm font-medium text-muted hover:text-ink" aria-expanded={open}>
                   Details
                   <ChevronDown size={16} className={clsx('transition-transform', open && 'rotate-180')} />
                 </button>
+              )}
+              <button type="button" onClick={() => setChart(true)} className="flex items-center gap-1.5 py-1 text-sm font-medium text-muted hover:text-ink" title="Shot group analysis chart (OWC précis Table 12-1)">
+                <BookOpen size={15} />
+                Précis chart
+              </button>
+            </div>
+            <PrecisChartDialog open={chart} onClose={() => setChart(false)} highlight={highlight} />
+            {(diags.length > 0 || a.reasons.length > 0) && (
+              <>
                 {open && (
                   <ul className="flex flex-col gap-2.5 text-center">
                     {a.reasons.map((r, i) => (
@@ -98,7 +139,19 @@ export function InsightsCard() {
                     {diags.map((d) => (
                       <li key={d.id} className="text-sm leading-snug">
                         <span className="font-semibold">{d.title}.</span> {d.detail}
-                        {d.advice && <span className="mt-0.5 block text-muted">{d.advice}</span>}
+                        {d.pattern ? (
+                          <>
+                            <span className="mt-0.5 block">
+                              <span className="font-semibold text-warn">Error:</span> {d.error} <span className="text-muted">{PATTERN_BY_ID[d.pattern].why}</span>
+                            </span>
+                            <span className="mt-0.5 block">
+                              <span className="font-semibold text-ok">Remedy:</span> {d.remedy}
+                            </span>
+                            {d.ref && <span className="mt-0.5 block text-xs text-muted">{d.ref}</span>}
+                          </>
+                        ) : (
+                          d.advice && <span className="mt-0.5 block text-muted">{d.advice}</span>
+                        )}
                       </li>
                     ))}
                   </ul>

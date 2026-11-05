@@ -1,4 +1,6 @@
 import { db, newId, type FirerRecord, type SessionRecord } from './db';
+import { blobToDataUrl, dataUrlToBlob } from './blob';
+import { queueLocalDb } from './localdb';
 
 export type FirerInput = Omit<FirerRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string };
 
@@ -17,6 +19,7 @@ export async function saveFirer(input: FirerInput): Promise<FirerRecord> {
     updatedAt: now,
   };
   await db().firers.put(rec);
+  queueLocalDb('putFirer', rec.id);
   return rec;
 }
 
@@ -25,6 +28,7 @@ export async function deleteFirer(id: string) {
     await db().sessions.where('firerId').equals(id).delete();
     await db().firers.delete(id);
   });
+  queueLocalDb('delFirer', id);
 }
 
 export async function findFirerByServiceNo(serviceNo: string) {
@@ -45,10 +49,15 @@ export async function saveSession(s: Omit<SessionRecord, 'id' | 'createdAt'>): P
     await db().sessions.put(rec);
     await db().firers.update(s.firerId, { updatedAt: rec.createdAt });
   });
+  queueLocalDb('putFirer', s.firerId);
+  queueLocalDb('putSession', rec.id);
   return rec;
 }
 
-export const deleteSession = (id: string) => db().sessions.delete(id);
+export async function deleteSession(id: string) {
+  await db().sessions.delete(id);
+  queueLocalDb('delSession', id);
+}
 
 export async function firerSessions(firerId: string) {
   const list = await db().sessions.where('firerId').equals(firerId).toArray();
@@ -80,21 +89,6 @@ export function statsOf(sessions: SessionRecord[]): FirerStats {
 
 const BACKUP_KIND = 'rfa-backup';
 
-async function blobToDataUrl(b?: Blob) {
-  if (!b) return undefined;
-  return new Promise<string>((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result as string);
-    r.onerror = () => rej(r.error);
-    r.readAsDataURL(b);
-  });
-}
-
-async function dataUrlToBlob(u?: string) {
-  if (!u) return undefined;
-  return (await fetch(u)).blob();
-}
-
 export async function exportBackup(): Promise<Blob> {
   const firers = await db().firers.toArray();
   const sessions = await db().sessions.toArray();
@@ -122,6 +116,8 @@ export async function importBackup(file: File): Promise<{ firers: number; sessio
     await db().firers.bulkPut(firers);
     await db().sessions.bulkPut(sessions);
   });
+  firers.forEach((f) => queueLocalDb('putFirer', f.id));
+  sessions.forEach((x) => queueLocalDb('putSession', x.id));
   return { firers: firers.length, sessions: sessions.length };
 }
 
@@ -162,6 +158,7 @@ export async function clearAll() {
     await db().sessions.clear();
     await db().firers.clear();
   });
+  queueLocalDb('clearAll', '*');
 }
 
 export function download(blob: Blob, name: string) {

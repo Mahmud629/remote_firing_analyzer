@@ -8,15 +8,16 @@ const STEPS: Record<Exclude<Topic, 'keys'>, string[]> = {
   photo: [
     'Photograph the target square-on with the whole 32 in outer ring in view.',
     'Analyze → Photo → Choose a photo (or drop the file on the picture).',
-    'The ring is calibrated and the holes are marked automatically.',
+    'The ring is found and calibrated automatically (camera tilt is corrected), then the holes are marked.',
     'Fix marks if needed: drag to move, right-click to delete, Add hit for a missed hole.',
     'Choose the firer, then Save group.',
   ],
   live: [
-    'Fix the camera so the target fills most of the picture.',
+    'Fix the camera so the target fills most of the picture. Zoom in until a bullet hole is at least 2 to 3 pixels wide.',
     'Analyze → Camera (or CCTV) → Start live.',
-    'Wait for "Ring locked" and "Ready". Marks already on the target are ignored.',
-    'Fire. Each new hole is numbered in the order it appears.',
+    'Hold fire while it shows "Reading target" (about 2 seconds). Holes, wrinkles and marks already on the target are learned and never counted.',
+    'Fire. A hole is counted only when it is new and stays for several frames; each one is numbered in the order it appears.',
+    'If the picture shakes, the light changes or someone walks past, counting pauses ("Picture moving") and nothing is counted from those frames.',
     'When all rounds are in, the frame is captured for review automatically.',
   ],
   cctv: [

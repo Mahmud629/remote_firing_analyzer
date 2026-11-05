@@ -55,7 +55,7 @@ export function renderAnnotated(a: AnnotateInput): HTMLCanvasElement {
     g.strokeStyle = 'rgba(34,195,255,0.9)';
     g.lineWidth = lw;
     g.beginPath();
-    g.ellipse(ctr.x, ctr.y, cal.radiusX * s, cal.radiusY * s, 0, 0, Math.PI * 2);
+    g.ellipse(ctr.x, ctr.y, cal.radiusX * s, cal.radiusY * s, cal.angle ?? 0, 0, Math.PI * 2);
     g.stroke();
   }
   const r = Math.max(6, unit * 0.32);

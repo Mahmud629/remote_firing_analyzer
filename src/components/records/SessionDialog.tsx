@@ -54,6 +54,11 @@ export function SessionDialog({ session, firer, onClose }: { session: SessionRec
               {s.diagnostics.map((d) => (
                 <li key={d.title}>
                   <span className="font-semibold">{d.title}.</span> {d.detail}
+                  {d.error && (
+                    <span className="block text-muted">
+                      Error: {d.error} Remedy: {d.remedy}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

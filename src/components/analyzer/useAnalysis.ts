@@ -2,7 +2,7 @@
 import { useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { analyze } from '@/core/analysis';
-import { toImage, toTarget } from '@/core/calibration';
+import { toImage, toTarget, targetCentre } from '@/core/calibration';
 import type { Analysis, Calibration, Vec2 } from '@/core/types';
 import { useAnalyzer } from '@/state/analyzer';
 import { useSettings } from '@/state/settings';
@@ -40,12 +40,12 @@ export function useAnalysis(): AnalysisView | null {
       cal = live?.phase === 'locked' ? live.calibration : null;
       if (!cal) return null;
       pts = live!.holes.filter((h) => h.confirmed && !h.previous).map((h) => h.p);
-      poaPx = cal.center;
+      poaPx = targetCentre(cal);
     } else {
       cal = calibration;
       if (!cal) return null;
       pts = shots.map((s) => s.p);
-      poaPx = poa ?? cal.center;
+      poaPx = poa ?? targetCentre(cal);
     }
     const shotsIn = pts.map((p) => toTarget(cal!, p));
     const poaIn = toTarget(cal, poaPx);

@@ -12,11 +12,22 @@ export interface Vec2 {
   y: number;
 }
 
-/** Axis-aligned ellipse fitted to the outer ring (handles mild camera tilt). */
+/**
+ * Ellipse fitted to the outer ring. A camera looking up at a raised target or
+ * from one side sees the ring as a (possibly rotated) ellipse.
+ */
 export interface Calibration {
   center: Vec2; // image px
-  radiusX: number; // image px (semi-axis)
-  radiusY: number; // image px (semi-axis)
+  radiusX: number; // image px (semi-axis along `angle`)
+  radiusY: number; // image px (semi-axis perpendicular to `angle`)
+  /** Rotation of the radiusX axis from the image x axis, radians (default 0). */
+  angle?: number;
+  /**
+   * Perspective (optional): 3x3 row-major homography from target inches
+   * (x right, y up, origin = ring centre) to image px. When present it is used
+   * instead of the ellipse for all conversions; editing the ring removes it.
+   */
+  H?: number[];
   diameterIn: number; // physical diameter of the ring, e.g. 32
   /** auto: ring found; manual: ring placed by hand; points: two known points */
   method: 'auto' | 'manual' | 'points';
@@ -47,6 +58,8 @@ export interface ClassBand {
 export interface Rules {
   requiredRounds: number;
   maxGroupIn: number;
+  /** Group up to this size (in) is a good group: no firer error (précis shot group analysis). */
+  goodGroupIn: number;
   zeroToleranceCm: number;
   lateralCmPerTurn: number;
   verticalCmPerTurn: number;
@@ -67,6 +80,14 @@ export interface Diagnostic {
   title: string;
   detail: string;
   advice?: string;
+  /** Précis shot-group pattern (Table 12-1) this diagnostic stands for. */
+  pattern?: import('./precis').PatternId;
+  /** Error column of the précis table. */
+  error?: string;
+  /** Remedies column of the précis table. */
+  remedy?: string;
+  /** Where it is in the précis. */
+  ref?: string;
 }
 
 export interface Analysis {

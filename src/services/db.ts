@@ -37,7 +37,7 @@ export interface SessionRecord {
   offsetCm: Vec2 | null;
   correction: { lateral: AxisCorrection; vertical: AxisCorrection } | null;
   classification: string | null;
-  diagnostics: { title: string; detail: string; advice?: string }[];
+  diagnostics: { title: string; detail: string; advice?: string; error?: string; remedy?: string; ref?: string }[];
   shotsIn: SavedShot[];
   poaIn: Vec2;
   calibration: { method: 'auto' | 'manual' | 'points'; confidence: number; diameterIn: number };
@@ -51,15 +51,24 @@ export interface SessionRecord {
   createdAt: number;
 }
 
+/** A change not yet copied to the local database file on the PC. */
+export interface OutboxItem {
+  seq?: number;
+  op: 'putFirer' | 'putSession' | 'delFirer' | 'delSession' | 'clearAll';
+  id: string;
+}
+
 export class RfaDatabase extends Dexie {
   firers!: EntityTable<FirerRecord, 'id'>;
   sessions!: EntityTable<SessionRecord, 'id'>;
+  outbox!: EntityTable<OutboxItem, 'seq'>;
   constructor() {
     super('remote-firing-analyzer');
     this.version(1).stores({
       firers: 'id, serviceNo, name, updatedAt',
       sessions: 'id, firerId, weaponSerial, date, createdAt, status',
     });
+    this.version(2).stores({ outbox: '++seq' });
   }
 }
 

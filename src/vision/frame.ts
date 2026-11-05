@@ -27,6 +27,17 @@ export interface FrameSource {
   gray(opts: { crop?: Rect; maxDim: number }): GrayView;
   /** Optional colour channels (sources without colour return null for 'warm'). */
   channel?(opts: { crop?: Rect; maxDim: number }, kind: Channel): GrayView | null;
+  /** Optional full colour view (target-face colour segmentation, neural hole check). */
+  rgb?(opts: { crop?: Rect; maxDim: number }): RgbView | null;
+}
+
+/** Three colour planes of the same crop. Source px = offset + p / scale. */
+export interface RgbView {
+  r: Gray;
+  g: Gray;
+  b: Gray;
+  scale: number;
+  offset: Vec2;
 }
 
 export const WARM_GAIN = 2;
@@ -101,8 +112,29 @@ export class CanvasFrameSource implements FrameSource {
     const warm = { img: warmFromRGBA(data, o.w, o.h), scale, offset };
     this.cache.set(`luma,${c.x},${c.y},${c.w},${c.h},${maxDim}`, luma);
     this.cache.set(`warm,${c.x},${c.y},${c.w},${c.h},${maxDim}`, warm);
+    this.rgbCache.set(`${c.x},${c.y},${c.w},${c.h},${maxDim}`, { ...planesFromRGBA(data, o.w, o.h), scale, offset });
     return kind === 'luma' ? luma : warm;
   }
+  private rgbCache = new Map<string, RgbView>();
+  rgb({ crop, maxDim }: { crop?: Rect; maxDim: number }): RgbView {
+    const c = fitCrop(this, crop);
+    const key = `${c.x},${c.y},${c.w},${c.h},${maxDim}`;
+    if (!this.rgbCache.has(key)) this.channel({ crop, maxDim }, 'luma');
+    return this.rgbCache.get(key)!;
+  }
+}
+
+export function planesFromRGBA(rgba: Uint8ClampedArray | Uint8Array, w: number, h: number) {
+  const n = w * h;
+  const r = new Float32Array(n);
+  const g = new Float32Array(n);
+  const b = new Float32Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    r[i] = rgba[j];
+    g[i] = rgba[j + 1];
+    b[i] = rgba[j + 2];
+  }
+  return { r: { w, h, d: r }, g: { w, h, d: g }, b: { w, h, d: b } };
 }
 
 function defaultCanvas(w: number, h: number): AnyCanvas {
@@ -117,16 +149,30 @@ function defaultCanvas(w: number, h: number): AnyCanvas {
 export class RgbArrayFrameSource implements FrameSource {
   private luma: Gray;
   private warm: Gray;
+  private planes: { r: Gray; g: Gray; b: Gray };
   constructor(rgb: Uint8Array, public width: number, public height: number) {
     const n = width * height;
     const l = new Float32Array(n);
     const wm = new Float32Array(n);
+    const pr = new Float32Array(n);
+    const pg = new Float32Array(n);
+    const pb = new Float32Array(n);
     for (let i = 0, j = 0; i < n; i++, j += 3) {
       l[i] = 0.299 * rgb[j] + 0.587 * rgb[j + 1] + 0.114 * rgb[j + 2];
       wm[i] = Math.max(0, Math.min(255, 128 + WARM_GAIN * (rgb[j] - rgb[j + 1])));
+      pr[i] = rgb[j];
+      pg[i] = rgb[j + 1];
+      pb[i] = rgb[j + 2];
     }
     this.luma = { w: width, h: height, d: l };
     this.warm = { w: width, h: height, d: wm };
+    this.planes = { r: { w: width, h: height, d: pr }, g: { w: width, h: height, d: pg }, b: { w: width, h: height, d: pb } };
+  }
+  rgb({ crop, maxDim }: { crop?: Rect; maxDim: number }): RgbView {
+    const c = fitCrop(this, crop);
+    const o = outputSize(c, maxDim);
+    const rs = (g: Gray) => resample(g, c, o.w, o.h);
+    return { r: rs(this.planes.r), g: rs(this.planes.g), b: rs(this.planes.b), scale: o.w / c.w, offset: { x: c.x, y: c.y } };
   }
   gray(opts: { crop?: Rect; maxDim: number }) {
     return this.channel(opts, 'luma');

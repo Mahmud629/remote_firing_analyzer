@@ -8,6 +8,7 @@ import { notify } from '@/state/toast';
 import { clearAll, download } from '@/services/records';
 import { UNITS } from '@/lib/format';
 import { BRANDS, maskedRtsp, mediamtxYaml, mtxConnect, mtxPing, mtxRemove, mtxState, type CamState } from '@/services/mediamtx';
+import { localDbBase, syncNow, useLocalDb, type LocalDbReason } from '@/services/localdb';
 import { CameraDialog } from './CameraDialog';
 import { CameraTestDialog } from './CameraTestDialog';
 
@@ -46,6 +47,7 @@ export function SettingsScreen() {
         <div className="grid gap-3 sm:grid-cols-3">
           <NumberField label="Rounds per group" value={r.requiredRounds} step={1} min={1} onChange={(v) => s.updateRules({ requiredRounds: Math.max(1, Math.round(v)) })} />
           <NumberField label="Max group (in)" value={r.maxGroupIn} onChange={(v) => s.updateRules({ maxGroupIn: v })} />
+          <NumberField label="Good group up to (in)" value={r.goodGroupIn ?? 5} onChange={(v) => s.updateRules({ goodGroupIn: Math.max(0.5, v) })} />
           <NumberField label="Zero tolerance (cm)" value={r.zeroToleranceCm} onChange={(v) => s.updateRules({ zeroToleranceCm: v })} />
           <NumberField label="Lateral cm per turn" value={r.lateralCmPerTurn} onChange={(v) => s.updateRules({ lateralCmPerTurn: Math.max(0.1, v) })} />
           <NumberField label="Vertical cm per turn" value={r.verticalCmPerTurn} onChange={(v) => s.updateRules({ verticalCmPerTurn: Math.max(0.1, v) })} />
@@ -66,13 +68,15 @@ export function SettingsScreen() {
             </Select>
           </Field>
           <NumberField label="Default range (m)" value={s.defaultRangeM} step={1} min={1} onChange={(v) => s.update({ defaultRangeM: v })} />
-          <Field label={`Sensitivity ${Math.round(s.sensitivity * 100)}%`}>
+          <Field label={`Sensitivity ${Math.round(s.sensitivity * 100)}%`} hint="Lower: fewer false marks. Higher: finds faint or very small holes.">
             <input type="range" min={0} max={1} step={0.05} value={s.sensitivity} onChange={(e) => s.update({ sensitivity: Number(e.target.value) })} className="accent-[var(--c-olive)]" />
           </Field>
-          <Field label={`Minimum certainty ${Math.round(s.minConfidence * 100)}%`}>
-            <input type="range" min={0.1} max={0.9} step={0.05} value={s.minConfidence} onChange={(e) => s.update({ minConfidence: Number(e.target.value) })} className="accent-[var(--c-olive)]" />
-          </Field>
         </div>
+        <p className="mt-3 text-sm text-muted">
+          Every possible hole is checked by two small neural networks that run on this computer, without internet: one looks at the hole in the
+          picture, the other compares the target before and after the shot. In live view only a new hole that stays for several frames is counted,
+          so wrinkles, ring lines and old holes never count.
+        </p>
         <div className="mt-4">
           <Toggle checked={s.autoCapture} onChange={(v) => s.update({ autoCapture: v })} label="Auto capture in live view" hint={`When all ${r.requiredRounds} hits are in and steady.`} />
         </div>
@@ -98,8 +102,12 @@ export function SettingsScreen() {
         </div>
       </Panel>
 
+      <Panel title="Local database">
+        <LocalDbStatus />
+      </Panel>
+
       <Panel title="Data">
-        <p className="text-sm text-muted">Records are kept in this browser. Back them up from the Records page.</p>
+        <p className="text-sm text-muted">Records are kept in this browser and, when the local database is running, in the database file as well. Back them up from the Records page.</p>
         <Button
           className="mt-3"
           variant="danger"
@@ -114,6 +122,66 @@ export function SettingsScreen() {
           Delete all records
         </Button>
       </Panel>
+    </div>
+  );
+}
+
+function LocalDbStatus() {
+  const d = useLocalDb();
+  const online = d.state === 'online';
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className={clsx('inline-flex items-center gap-2 rounded-md border px-2.5 py-1 font-semibold', online ? 'border-[var(--c-olive)] text-[var(--c-olive)]' : 'border-[#c0392b] text-[#c0392b]')}>
+          <span className={clsx('h-2 w-2 rounded-full', online ? 'bg-[var(--c-olive)]' : 'bg-[#c0392b]')} />
+          {online ? 'Connected' : d.state === 'unknown' ? 'Checking' : d.reason === 'blocked' ? 'Address not allowed' : 'Not running'}
+        </span>
+        <Button size="sm" icon={<RefreshCw size={14} />} disabled={d.busy} onClick={async () => {
+          const r = await syncNow();
+          notify(r ? 'ok' : 'warn', r ? `Synced: ${r.pushed} sent, ${r.pulled} received` : useLocalDb.getState().reason === 'blocked' ? 'Open the app at http://localhost:3939' : 'Local database is not running: start start-app.bat');
+        }}>Sync now</Button>
+        {online && <a className="text-sm underline" href={`${localDbBase()}/api/download`}>Download rfa.db</a>}
+      </div>
+      {online ? (
+        <p className="text-muted">
+          File: <span className="break-all font-mono">{d.dbPath}</span><br />
+          {d.firers} firers, {d.sessions} groups, {(d.dbBytes / 1024).toFixed(0)} KB.{d.pending > 0 ? ` ${d.pending} changes waiting.` : ' Everything is saved.'}
+          {d.lastSync ? ` Last sync ${new Date(d.lastSync).toLocaleTimeString()}.` : ''}
+        </p>
+      ) : (
+        <LocalDbHelp reason={d.reason} pending={d.pending} />
+      )}
+    </div>
+  );
+}
+
+function LocalDbHelp({ reason, pending }: { reason: LocalDbReason; pending: number }) {
+  const here = typeof window !== 'undefined' ? window.location.origin : '';
+  const localPage = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(here);
+  const waiting = pending > 0 ? ` ${pending} change${pending === 1 ? ' is' : 's are'} waiting and will be sent as soon as it connects.` : '';
+  return (
+    <div className="space-y-2 text-muted">
+      {reason === 'blocked' ? (
+        <p>
+          The database is running, but it does not accept this page's address (<span className="font-mono">{here}</span>). Open the app at{' '}
+          <a className="font-mono underline" href="http://localhost:3939">http://localhost:3939</a> instead.{waiting}
+        </p>
+      ) : (
+        <>
+          <p>
+            Your records are safe in this browser.{waiting} To also keep them in the database file on this PC:
+          </p>
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>Double-click <span className="font-mono">start-app.bat</span> in the project folder. A window named <span className="font-mono">RFA Database</span> opens: keep it open.</li>
+            <li>
+              Use the app at <a className="font-mono underline" href="http://localhost:3939">http://localhost:3939</a>
+              {localPage ? '' : ' (this page is opened from another address; the browser may ask to allow access to devices on your local network: choose Allow)'}.
+            </li>
+            <li>If that window shows an error or closes, read the message in it (port in use, or a folder that cannot be written).</li>
+          </ol>
+          <p>This page checks again every few seconds and connects by itself.</p>
+        </>
+      )}
     </div>
   );
 }

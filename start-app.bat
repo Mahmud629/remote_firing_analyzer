@@ -1,6 +1,16 @@
 @echo off
-rem Starts MediaMTX (camera server) in its own window, then the analyzer, then opens the browser.
+title RFA Database
+rem Remote Firing Analyzer: same as "npm start". Installs and builds the first time, starts MediaMTX
+rem (CCTV) and the local database, which also serves the app, and opens http://localhost:3939
 cd /d "%~dp0"
-start "MediaMTX" cmd /k "cd /d %~dp0mediamtx && mediamtx.exe mediamtx.yml"
-start "" cmd /c "timeout /t 8 >nul & start http://localhost:3000"
-npm run dev
+where node >nul 2>nul
+if errorlevel 1 goto nonode
+node server\start.mjs
+pause
+exit /b
+
+:nonode
+echo Node.js is not installed on this PC.
+echo Install Node.js 20 or newer from https://nodejs.org and run this file again.
+pause
+exit /b 1

@@ -82,23 +82,11 @@
 
 /* camouflage banner (same in light and dark themes) */
 .camo-bg {
-  background-color: #17221a;
-  background-image:
-    radial-gradient(ellipse 70px 34px at 10% 28%, #2c4326 96%, transparent 100%),
-    radial-gradient(ellipse 48px 40px at 34% 74%, #3b3a22 96%, transparent 100%),
-    radial-gradient(ellipse 90px 30px at 58% 26%, #223420 96%, transparent 100%),
-    radial-gradient(ellipse 52px 36px at 82% 70%, #34482b 96%, transparent 100%),
-    radial-gradient(ellipse 62px 26px at 72% 12%, #453d26 96%, transparent 100%),
-    radial-gradient(ellipse 44px 34px at 22% 92%, #2a3a20 96%, transparent 100%),
-    radial-gradient(ellipse 58px 28px at 92% 38%, #1f2e1d 96%, transparent 100%);
-  background-size:
-    360px 100%,
-    360px 100%,
-    360px 100%,
-    360px 100%,
-    510px 100%,
-    510px 100%,
-    510px 100%;
+  background-color: #2b2a22;
+  background-image: url('/camo.jpg');
+  background-repeat: repeat;
+  background-size: 300px 300px;
+  background-position: left center;
 }
 
 /* tagline scrolling from right to left */

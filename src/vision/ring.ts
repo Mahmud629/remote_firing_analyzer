@@ -28,9 +28,18 @@ const SECTORS = 72;
  *   ellipse fit, and the two are averaged so the calibration sits on the centre
  *   of the line.
  */
-export function detectRing(src: FrameSource, opts: RingOptions): Calibration | null {
+type Cand = { cx: number; cy: number; rx: number; ry: number; coverage: number; votes: number };
+
+/** Stage 1 only: coarse ring candidates in source px (best first). */
+export function coarseRingCandidates(src: FrameSource, opts: RingOptions): { cx: number; cy: number; rx: number; ry: number; quality: number }[] {
+  const st = stage1(src, opts);
+  if (!st) return [];
+  const s1 = st.view.scale;
+  return st.cands.map((c) => ({ cx: st.view.offset.x + c.cx / s1, cy: st.view.offset.y + c.cy / s1, rx: c.rx / s1, ry: c.ry / s1, quality: c.votes }));
+}
+
+function stage1(src: FrameSource, opts: RingOptions) {
   const searchSize = opts.searchSize ?? 480;
-  const refineSize = opts.refineSize ?? 1000;
   const minCoverage = opts.minCoverage ?? 0.55;
 
   // ---- Stage 1: coarse Hough search ---------------------------------------
@@ -73,7 +82,6 @@ export function detectRing(src: FrameSource, opts: RingOptions): Calibration | n
     peaks.unshift({ x: near.reduce((a, p) => a + p.x * p.v, 0) / sw, y: near.reduce((a, p) => a + p.y * p.v, 0) / sw, v: peaks[0].v });
   }
 
-  type Cand = { cx: number; cy: number; rx: number; ry: number; coverage: number; votes: number };
   const cands: Cand[] = [];
   for (const p of peaks.slice(0, 6)) {
     if (p.v < peaks[0].v * 0.35) break;
@@ -86,7 +94,16 @@ export function detectRing(src: FrameSource, opts: RingOptions): Calibration | n
   }
   if (!cands.length) return null;
   cands.sort((a, b) => b.votes - a.votes);
-  const best = cands[0];
+  return { cands, view };
+}
+
+export function detectRing(src: FrameSource, opts: RingOptions): Calibration | null {
+  const refineSize = opts.refineSize ?? 1000;
+  const minCoverage = opts.minCoverage ?? 0.55;
+  const st = stage1(src, opts);
+  if (!st) return null;
+  const { view } = st;
+  const best = st.cands[0];
 
   // to source px
   const s1 = view.scale;

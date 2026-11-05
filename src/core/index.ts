@@ -4,3 +4,4 @@ export * from './geometry';
 export * from './calibration';
 export * from './analysis';
 export * from './diagnostics';
+export * from './precis';

@@ -65,20 +65,24 @@ export async function buildPdf({ group: g, firer: f, imageDataUrl, closeUpDataUr
   doc.rect(0, 0, W, 28, 'F');
   setFill(BRASS);
   doc.rect(0, 28, W, 1.2, 'F');
-  const logo = await toDataUrl('/bd-army-logo.png');
-  if (logo) doc.addImage(logo, 'PNG', M, 5, 18, 18);
+  // project logo on the left, Bangladesh Army crest on the right
+  const logo = await toDataUrl('/rfa-logo-pdf.png');
+  if (logo) doc.addImage(logo, 'PNG', M - 1, 3, 22, 22);
+  const crest = await toDataUrl('/bd-army-logo.png');
+  if (crest) doc.addImage(crest, 'PNG', W - M - 17, 5.5, 17, 17);
+  const RIGHT = crest ? W - M - 21 : W - M;
   setText([255, 255, 255]);
   font('bold', 17);
-  doc.text('Rifle Zeroing Result Sheet', M + 23, 13.5);
+  doc.text('Rifle Zeroing Result Sheet', M + 25, 13.5);
   font('normal', 9.5);
   setText([200, 210, 225]);
-  doc.text('Remote Firing Analyzer', M + 23, 19.5);
+  doc.text('Remote Firing Analyzer', M + 25, 19.5);
   font('bold', 10);
   setText([255, 255, 255]);
-  doc.text(g.date, W - M, 12, { align: 'right' });
+  doc.text(g.date, RIGHT, 12, { align: 'right' });
   font('normal', 9);
   setText([200, 210, 225]);
-  doc.text(`Group ${g.groupNo ?? 1}${sessionGroups.length > 1 ? ` of ${sessionGroups.length}` : ''}`, W - M, 18, { align: 'right' });
+  doc.text(`Group ${g.groupNo ?? 1}${sessionGroups.length > 1 ? ` of ${sessionGroups.length}` : ''}`, RIGHT, 18, { align: 'right' });
 
   // ---- status banner
   const tone = TONE[g.status] ?? TONE.WASHOUT;
@@ -239,7 +243,8 @@ export async function buildPdf({ group: g, firer: f, imageDataUrl, closeUpDataUr
   const nw = sessionGroups.length > 0 ? half : W - 2 * M;
   const lines: [string, boolean][] = [];
   for (const r of g.reasons) lines.push([r, false]);
-  for (const d of g.diagnostics) lines.push([`${d.title}. ${d.advice ? adviceFix(d.advice) : firstSentence(d.detail)}`, false]);
+  for (const d of g.diagnostics)
+    lines.push([d.error ? `${d.title}. Error: ${d.error} Remedy: ${d.remedy ?? ''}` : `${d.title}. ${d.advice ? adviceFix(d.advice) : firstSentence(d.detail)}`, false]);
   if (g.notes) lines.push([`Remarks: ${g.notes}`, true]);
   if (lines.length) {
     heading(nx, top, 'Notes', nw);

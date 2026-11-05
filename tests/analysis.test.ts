@@ -54,7 +54,7 @@ describe('zeroing analysis', () => {
   it('flags vertical stringing in inches regardless of image size', () => {
     const shots = [{ x: 0, y: 3 }, { x: 0.3, y: 1.5 }, { x: -0.2, y: 0 }, { x: 0.1, y: -1.5 }, { x: 0, y: -3 }];
     const a = analyze(shots, centre, DEFAULT_RULES);
-    expect(a.diagnostics.some((d) => d.id === 'vertical')).toBe(true);
+    expect(a.diagnostics.some((d) => d.pattern === 'short-vertical')).toBe(true);
   });
 
   it('uses the aiming point, not the ring centre', () => {

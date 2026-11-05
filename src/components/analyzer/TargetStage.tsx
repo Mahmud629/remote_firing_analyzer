@@ -2,7 +2,7 @@
 import clsx from 'clsx';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { ImagePlus, Loader2 } from 'lucide-react';
-import { pxPerInch, toImage } from '@/core/calibration';
+import { pxPerInch, targetCentre, toImage, withoutPerspective } from '@/core/calibration';
 import type { Calibration, Vec2 } from '@/core/types';
 import { useAnalyzer, type LiveSource } from '@/state/analyzer';
 import { useSettings } from '@/state/settings';
@@ -151,7 +151,8 @@ export function TargetStage() {
         const c = st.calibration;
         if (!c) break;
         const p = toImg(e.clientX, e.clientY);
-        let next: Calibration = { ...c, method: 'manual', confidence: 1 };
+        // editing by hand: plain ellipse (the perspective model belongs to the automatic fit)
+        let next: Calibration = { ...withoutPerspective(c), method: 'manual', confidence: 1 };
         if (d.kind === 'center') next = { ...next, center: { x: p.x - d.dx, y: p.y - d.dy } };
         if (d.kind === 'rx') {
           const r = Math.max(10, Math.abs(p.x - c.center.x));
@@ -161,7 +162,8 @@ export function TargetStage() {
           const r = Math.max(10, Math.abs(p.y - c.center.y));
           next = e.shiftKey ? { ...next, radiusY: r } : { ...next, radiusY: r, radiusX: c.radiusX * (r / c.radiusY) };
         }
-        const poaFollows = st.poa && Math.hypot(st.poa.x - c.center.x, st.poa.y - c.center.y) < 1;
+        const tc = targetCentre(c);
+        const poaFollows = st.poa && Math.hypot(st.poa.x - tc.x, st.poa.y - tc.y) < 1;
         useAnalyzer.setState({ calibration: next, poa: poaFollows ? next.center : st.poa, savedId: null });
         break;
       }
@@ -316,6 +318,7 @@ function Overlay({ W, H, k, startDrag }: { W: number; H: number; k: number; star
             cy={cal.center.y}
             rx={cal.radiusX}
             ry={cal.radiusY}
+            transform={cal.angle ? `rotate(${(cal.angle * 180) / Math.PI} ${cal.center.x} ${cal.center.y})` : undefined}
             fill="none"
             stroke={locked ? 'var(--c-ring)' : 'var(--c-hit)'}
             strokeWidth={locked ? 2.5 : 2}

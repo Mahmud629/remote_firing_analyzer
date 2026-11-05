@@ -85,25 +85,38 @@ export function resample(src: Gray, crop: Rect, nw: number, nh: number): Gray {
 export function boxBlur(src: Gray, r: number): Gray {
   if (r < 1) return src;
   const { w, h } = src;
+  const d = src.d;
   const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);
-  const n = 2 * r + 1;
+  const inv = 1 / (2 * r + 1);
+  // horizontal: running sum with edge replication, branch-free in the middle
   for (let y = 0; y < h; y++) {
     const o = y * w;
-    let s = 0;
-    for (let k = -r; k <= r; k++) s += src.d[o + Math.min(w - 1, Math.max(0, k))];
+    const first = d[o];
+    const last = d[o + w - 1];
+    let s = first * (r + 1);
+    for (let k = 1; k <= r; k++) s += d[o + Math.min(w - 1, k)];
     for (let x = 0; x < w; x++) {
-      tmp[o + x] = s / n;
-      s += src.d[o + Math.min(w - 1, x + r + 1)] - src.d[o + Math.max(0, x - r)];
+      tmp[o + x] = s * inv;
+      const add = x + r + 1 < w ? d[o + x + r + 1] : last;
+      const sub = x - r >= 0 ? d[o + x - r] : first;
+      s += add - sub;
     }
   }
-  for (let x = 0; x < w; x++) {
-    let s = 0;
-    for (let k = -r; k <= r; k++) s += tmp[Math.min(h - 1, Math.max(0, k)) * w + x];
-    for (let y = 0; y < h; y++) {
-      out[y * w + x] = s / n;
-      s += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
-    }
+  // vertical: process whole rows at a time (cache friendly)
+  const acc = new Float64Array(w); // 64-bit: running sums over tall images must not drift
+  for (let x = 0; x < w; x++) acc[x] = tmp[x] * (r + 1);
+  for (let k = 1; k <= r; k++) {
+    const row = Math.min(h - 1, k) * w;
+    for (let x = 0; x < w; x++) acc[x] += tmp[row + x];
+  }
+  const lastRow = (h - 1) * w;
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let x = 0; x < w; x++) out[o + x] = acc[x] * inv;
+    const addRow = y + r + 1 < h ? (y + r + 1) * w : lastRow;
+    const subRow = y - r >= 0 ? (y - r) * w : 0;
+    for (let x = 0; x < w; x++) acc[x] += tmp[addRow + x] - tmp[subRow + x];
   }
   return { w, h, d: out };
 }
@@ -404,4 +417,22 @@ function quantileOf(v: number[], q: number) {
   for (let i = 0; i < v.length; i += step) s.push(v[i]);
   s.sort((a, b) => a - b);
   return s[Math.min(s.length - 1, Math.max(0, Math.floor(q * (s.length - 1))))];
+}
+
+/** Gaussian blur approximated by three box blurs (Kovesi). */
+export function gaussBlur(src: Gray, sigma: number): Gray {
+  if (sigma < 0.4) return src;
+  const n = 3;
+  const wIdeal = Math.sqrt((12 * sigma * sigma) / n + 1);
+  let wl = Math.floor(wIdeal);
+  if (wl % 2 === 0) wl--;
+  const wu = wl + 2;
+  const mIdeal = (12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4);
+  const m = Math.round(mIdeal);
+  let out = src;
+  for (let i = 0; i < n; i++) {
+    const w = i < m ? wl : wu;
+    out = boxBlur(out, Math.max(0, (w - 1) >> 1));
+  }
+  return out;
 }

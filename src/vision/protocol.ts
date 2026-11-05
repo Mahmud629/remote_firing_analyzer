@@ -1,9 +1,22 @@
 import type { Calibration } from '../core/types';
 import type { Hole } from './holes';
+import type { LiveSettings, LiveStepResult } from './live_engine';
+
+/** Live change detection, run inside the worker (the learned target stays there). */
+export interface LiveRequest {
+  /** the locked calibration; a new `version` makes the engine learn the target again */
+  calibration: Calibration;
+  version: number;
+  settings: LiveSettings;
+  /** process the frame in this request */
+  step: boolean;
+  command?: { kind: 'nextGroup' } | { kind: 'remove'; id: string } | { kind: 'clear' };
+}
 
 export interface VisionRequest {
   id: number;
-  bitmap: ImageBitmap;
+  /** frame; may be omitted for live commands */
+  bitmap?: ImageBitmap;
   findRing: boolean;
   findHoles: boolean;
   /** Use this calibration for hole detection instead of a fresh ring search. */
@@ -12,14 +25,11 @@ export interface VisionRequest {
   holeDiameterIn: number;
   sensitivity: number;
   minConfidence: number;
-  /**
-   * Learning the clean target: run the hole detector at several sensitivities
-   * and return everything. A higher sensitivity is not a superset (blobs can
-   * merge with ring lines and then fail the shape test), so one pass is not enough.
-   */
+  /** kept for compatibility (old learning pass); ignored by the ML detector */
   learn?: boolean;
-  /** Live video: skip the slower half-size pass. */
+  /** Live video: lighter ring search. */
   live?: boolean;
+  liveStep?: LiveRequest;
 }
 
 export interface VisionResponse {
@@ -29,4 +39,7 @@ export interface VisionResponse {
   lowResolution?: boolean;
   ms: number;
   error?: string;
+  live?: LiveStepResult;
+  /** which detector produced the holes */
+  detector?: 'ml' | 'classic';
 }

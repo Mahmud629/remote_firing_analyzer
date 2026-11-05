@@ -60,7 +60,7 @@ export function analyze(shots: Vec2[], poa: Vec2, rules: Rules = DEFAULT_RULES, 
 
   const diagnostics = [
     ...zeroingDiagnostics(group?.sizeIn ?? null, offsetCm, radialErrorCm, rules),
-    ...firingDiagnostics(shots, opts),
+    ...firingDiagnostics(shots, { leftHanded: opts.leftHanded, poa, toleranceIn: rules.zeroToleranceCm / IN_TO_CM, goodIn: rules.goodGroupIn ?? 5, longIn: rules.classes[1]?.maxIn ?? 7 }),
   ];
 
   return {

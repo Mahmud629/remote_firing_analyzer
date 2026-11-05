@@ -6,6 +6,7 @@ export const IN_TO_CM = 2.54;
 export const DEFAULT_RULES: Rules = {
   requiredRounds: 5,
   maxGroupIn: 10,
+  goodGroupIn: 5,
   zeroToleranceCm: 5,
   lateralCmPerTurn: 32,
   verticalCmPerTurn: 24,

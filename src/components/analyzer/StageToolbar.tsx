@@ -115,14 +115,16 @@ function LiveControls() {
         ? 'Locking ring…'
         : 'Finding ring…'
       : view?.learning
-        ? 'Hold fire, reading target…'
-        : view?.captureIn != null
+        ? `Hold fire, reading target… ${Math.round(100 * (view.learnProgress ?? 0))}%`
+        : view?.unstable
+          ? 'Picture moving, waiting…'
+          : view?.captureIn != null
           ? `${counted}/${required}, capturing in ${Math.ceil(view.captureIn)} s`
           : `Ready. ${counted}/${required} hits`;
   return (
     <div className={clsx(bar, 'pointer-events-auto pr-1')}>
       <span className="flex items-center gap-2 px-2 text-sm font-medium text-white" role="status" aria-live="polite">
-        <span className={clsx('h-2.5 w-2.5 rounded-full', phase === 'locked' && !view?.learning ? 'bg-[var(--c-ok)]' : 'animate-pulse bg-hit')} />
+        <span className={clsx('h-2.5 w-2.5 rounded-full', phase === 'locked' && !view?.learning && !view?.unstable ? 'bg-[var(--c-ok)]' : 'animate-pulse bg-hit')} />
         {status}
       </span>
       <span className="mx-1 h-6 w-px bg-white/20" />

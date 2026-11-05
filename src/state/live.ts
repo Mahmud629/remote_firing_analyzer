@@ -1,7 +1,7 @@
 'use client';
-import { HoleTracker, RingLock } from '../vision/tracker';
-import { pxPerInch, toImage } from '../core/calibration';
-import type { Calibration, Shot, Vec2 } from '../core/types';
+import { RingLock } from '../vision/tracker';
+import type { Calibration, Shot } from '../core/types';
+import type { LiveStepResult } from '../vision/live_engine';
 import { vision } from '../services/vision';
 import { grabFrame } from '../services/camera';
 import { holeDiameterIn, settings } from './settings';
@@ -12,26 +12,34 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Live pipeline for a camera or CCTV stream.
- *   1. Search every frame for the outer ring until it is steady -> lock calibration.
- *   2. With the ring locked, look for holes on every frame; a hole counts once it
- *      is seen on most recent frames (shadows and flicker are ignored).
- *   3. When all rounds are found and nothing changes for a moment, freeze the
- *      frame into review (auto capture), or the operator presses Capture.
- * The ring is re-checked every few frames; if the camera moves it re-locks.
+ *   1. Find the target on every frame until the ring is steady, then lock it.
+ *   2. Hold fire: the target is learned (a "before" picture and how much every
+ *      pixel flickers).
+ *   3. Every frame is aligned to that picture and compared. Only a small new
+ *      change that a neural network accepts as a bullet hole and that stays for
+ *      several frames is counted. Wrinkles, ring crossings, board edges and old
+ *      holes never count, because they were already there.
+ *   4. When all rounds are in and nothing changes for a moment, the frame is
+ *      frozen into review (auto capture), or the operator presses Capture.
+ * The ring is re-checked every few frames; if the camera moved, the ring is
+ * locked again and the target re-learned, and the counted holes are kept.
  */
 export class LiveSession {
   private lock = new RingLock();
-  private tracker = new HoleTracker();
   private running = false;
   private frameNo = 0;
   private lastChange = 0;
-  /** Frames left to read the clean target after the ring locks. */
-  private learning = 0;
-  private static LEARN_FRAMES = 8;
   private video: HTMLVideoElement | null = null;
-  /** Picture of the target before firing; a real hole is a change from it. */
-  private reference: { bitmap: ImageBitmap; cal: Calibration } | null = null;
   private source: Frame['source'] = 'camera';
+  private version = 0;
+  private lockedCal: Calibration | null = null;
+  private last: LiveStepResult | null = null;
+  private command: NonNullable<import('../vision/protocol').LiveRequest['command']> | null = null;
+  private lastMs = 0;
+  private lastError: string | undefined;
+  private announcedDone = false;
+  private wasUnstable = false;
+  private warnedSmall = false;
 
   start(video: HTMLVideoElement, source: Frame['source']) {
     if (this.running && this.video === video) return;
@@ -39,9 +47,11 @@ export class LiveSession {
     this.source = source;
     this.running = true;
     this.lock.reset();
-    this.learning = 0;
-    this.dropReference();
-    this.tracker = new HoleTracker(Math.max(0.35, holeDiameterIn() * 1.2));
+    this.lockedCal = null;
+    this.last = null;
+    this.command = { kind: 'clear' };
+    this.announcedDone = false;
+    this.warnedSmall = false;
     this.lastChange = performance.now();
     void this.loop();
   }
@@ -49,107 +59,48 @@ export class LiveSession {
   stop() {
     this.running = false;
     this.video = null;
-    this.dropReference();
-  }
-
-  private dropReference() {
-    this.reference?.bitmap.close();
-    this.reference = null;
-  }
-
-  private async takeReference(v: HTMLVideoElement, cal: Calibration) {
-    try {
-      const bitmap = await createImageBitmap(v);
-      this.dropReference();
-      this.reference = { bitmap, cal };
-    } catch {
-      this.reference = null;
-    }
-  }
-
-  /**
-   * True when the patch around p differs from the reference picture: the core
-   * changed clearly more than its surroundings (which absorb noise and light).
-   */
-  private changedSinceReference(pIn: Vec2): boolean {
-    const v = this.video;
-    const ref = this.reference;
-    const cal = this.lock.calibration;
-    if (!v || !ref || !cal) return true;
-    const p = toImage(cal, pIn);
-    const q = toImage(ref.cal, pIn);
-    const r = Math.max(2.5, (pxPerInch(cal) * holeDiameterIn()) / 2);
-    const half = Math.ceil(r * 3.2);
-    const size = half * 2 + 1;
-    const grab = (src: CanvasImageSource, c: Vec2) => {
-      const cv = new OffscreenCanvas(size, size);
-      const g = cv.getContext('2d', { willReadFrequently: true })!;
-      g.drawImage(src, Math.round(c.x) - half, Math.round(c.y) - half, size, size, 0, 0, size, size);
-      const d = g.getImageData(0, 0, size, size).data;
-      const out = new Float32Array(size * size);
-      for (let i = 0; i < out.length; i++) out[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
-      return out;
-    };
-    try {
-      const now = grab(v, p);
-      const before = grab(ref.bitmap, q);
-      let core = 0, nc = 0, ring = 0, nr = 0;
-      for (let y = 0; y < size; y++)
-        for (let x = 0; x < size; x++) {
-          const d = Math.hypot(x - half, y - half);
-          const diff = Math.abs(now[y * size + x] - before[y * size + x]);
-          if (d <= r * 0.8) (core += diff), nc++;
-          else if (d >= r * 2 && d <= r * 3.1) (ring += diff), nr++;
-        }
-      core /= nc || 1;
-      ring /= nr || 1;
-      return core > Math.max(14, ring * 3);
-    } catch {
-      return true; // cannot read pixels (e.g. CORS): fall back to the tracker alone
-    }
   }
 
   /** Keep holes already on the target but count only new ones. */
   nextGroup() {
-    this.tracker.startNewGroup();
+    this.command = { kind: 'nextGroup' };
+    this.announcedDone = false;
     this.lastChange = performance.now();
-    this.publish();
   }
 
   removeHole(id: string) {
-    this.tracker.remove(id);
+    this.command = { kind: 'remove', id };
+    if (this.last) this.last = { ...this.last, holes: this.last.holes.filter((h) => h.id !== id) };
     this.publish();
   }
 
   /** Forget the ring lock and search again (e.g. after moving the camera). */
   relock() {
     this.lock.reset();
-    this.learning = 0;
+    this.lockedCal = null;
     this.publish();
+  }
+
+  private get counted() {
+    return (this.last?.holes ?? []).filter((h) => h.confirmed && !h.previous).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   }
 
   /** Freezes the current frame into review. Returns false when it could not. */
   async capture(): Promise<boolean> {
     const v = this.video;
-    const cal = this.lock.calibration;
+    const cal = this.lockedCal;
     if (!v) return false;
     try {
       const { blob, width, height } = await grabFrame(v);
       const store = useAnalyzer.getState();
-      if (!cal || this.tracker.current.length === 0) {
+      const counted = this.counted;
+      if (!cal || counted.length === 0) {
         // nothing new counted (or no ring yet): analyse the frame like a photo
         this.stop();
         await store.setFrame(blob, width, height, this.source);
         return true;
       }
-      const shots: Shot[] = this.tracker.current.map((t) => ({
-        id: t.id,
-        p: toImage(cal, t.pIn),
-        source: 'live',
-        confidence: t.confidence,
-        merged: t.merged,
-        seq: t.seq,
-      }));
+      const shots: Shot[] = counted.map((t) => ({ id: t.id, p: t.p, source: 'live', confidence: t.confidence, merged: false, seq: t.seq }));
       this.stop();
       store.fromLive(blob, width, height, cal, shots, this.source);
       return true;
@@ -161,13 +112,9 @@ export class LiveSession {
 
   /** The stream dropped: keep the last picture and the counted hits instead of losing them. */
   async rescue(): Promise<boolean> {
-    if (!this.video || !this.lock.calibration || this.tracker.current.length === 0) return false;
+    if (!this.video || !this.lockedCal || this.counted.length === 0) return false;
     return this.capture();
   }
-
-  private lastMs = 0;
-  private lastLowRes = false;
-  private lastError: string | undefined;
 
   private async loop() {
     while (this.running) {
@@ -177,21 +124,26 @@ export class LiveSession {
         continue;
       }
       const st = settings();
-      const locked = this.lock.calibration;
+      const locked = this.lockedCal;
       const findRing = !locked || this.frameNo % 5 === 0;
       this.frameNo++;
+      // commands go with the next locked frame (they are kept until then)
+      const command = locked ? this.command : null;
+      if (locked) this.command = null;
       let res;
       try {
         res = await vision.run(v, {
           findRing,
-          findHoles: !!locked,
-          calibration: locked,
+          findHoles: false,
+          calibration: null,
           diameterIn: st.rules.targetDiameterIn,
           holeDiameterIn: holeDiameterIn(st),
           sensitivity: st.sensitivity,
           minConfidence: st.minConfidence,
-          learn: this.learning > 0 && !!locked,
           live: true,
+          liveStep: locked
+            ? { calibration: locked, version: this.version, settings: { holeDiameterIn: holeDiameterIn(st), sensitivity: st.sensitivity }, step: true, command: command ?? undefined }
+            : undefined,
         });
       } catch (err) {
         this.lastError = err instanceof Error ? err.message : String(err);
@@ -201,53 +153,55 @@ export class LiveSession {
       }
       if (!this.running) break;
       this.lastMs = res.ms;
-      this.lastLowRes = !!res.lowResolution;
       this.lastError = res.error;
+      if (res.live) this.onLive(res.live);
       if (findRing) {
         const state = this.lock.update(res.ring);
         if (state.event === 'moved') {
           this.lastChange = performance.now();
-          this.dropReference();
-          notify('warn', 'Camera moved', 'Finding the ring again.');
+          notify('warn', 'Camera or target moved', 'Finding the ring again. Hits already counted are kept.');
         }
-        if (state.event === 'locked') {
-          notify('ok', 'Calibration done', 'Ring locked. Reading the target, hold fire.');
-          if (this.tracker.all.length === 0) this.learning = LiveSession.LEARN_FRAMES;
-          else void this.takeReference(v, state.calibration!); // re-locked after a move
+        if (state.event === 'locked' && state.calibration) {
+          this.lockedCal = state.calibration;
+          this.version++;
+          notify('ok', 'Calibration done', 'Ring locked. Reading the target: hold fire.');
         }
-      }
-      const cal = this.lock.calibration;
-      if (cal && res.holes && locked && this.learning > 0) {
-        this.tracker.learnBaseline(res.holes.map((h) => ({ pIn: h.pIn, confidence: h.confidence, merged: h.merged })));
-        this.learning--;
-        if (this.learning === 0) {
-          await this.takeReference(v, cal);
-          notify('ok', 'Ready', 'Start firing. Only new holes are counted.');
-        }
-        this.lastChange = performance.now();
-      } else if (cal && res.holes) {
-        // holes were found with the calibration current at request time; keep them in target inches
-        // pIn was measured against the calibration sent with the request
-        const newly = this.tracker.update(res.holes.map((h) => ({ pIn: h.pIn, confidence: h.confidence, merged: h.merged })));
-        for (const t of newly) if (!this.changedSinceReference(t.pIn)) this.tracker.markPrinted(t.id);
-        if (newly.length) this.lastChange = performance.now();
-        const counted = this.tracker.current.length;
-        if (newly.some((t) => t.confirmed && !t.previous) && counted === st.rules.requiredRounds) notify('ok', 'Bullet marks done', `All ${counted} hits found.`);
+        if (!this.lock.calibration && this.lockedCal && state.event === 'moved') this.lockedCal = null;
       }
       this.publish();
       if (this.shouldAutoCapture()) {
         await this.capture();
         break;
       }
-      await sleep(30);
+      await sleep(15);
+    }
+  }
+
+  private onLive(r: LiveStepResult) {
+    const prevPhase = this.last?.phase;
+    this.last = r;
+    if (prevPhase === 'learning' && r.phase !== 'learning') notify('ok', 'Ready', 'Start firing. Only new holes are counted.');
+    if (r.lowResolution && !this.warnedSmall) {
+      this.warnedSmall = true;
+      notify('warn', 'Target is small in the picture', `A hole is only ${r.holePx.toFixed(1)} px wide. Zoom the camera in so the target fills the picture.`);
+    }
+    if (r.relearned) notify('warn', 'Scene changed', 'Light or camera changed. Reading the target again: hold fire. Counted hits are kept.');
+    if (r.withdrawn.length) notify('info', 'Mark removed', 'A change disappeared again (bird, insect or shadow), so it was not a hole.');
+    if (r.phase === 'unstable' && !this.wasUnstable) this.lastChange = performance.now();
+    this.wasUnstable = r.phase === 'unstable';
+    if (r.newlyCounted.length || r.withdrawn.length) this.lastChange = performance.now();
+    const required = settings().rules.requiredRounds;
+    if (r.newlyCounted.length && this.counted.length === required && !this.announcedDone) {
+      this.announcedDone = true;
+      notify('ok', 'Bullet marks done', `All ${required} hits found.`);
     }
   }
 
   private shouldAutoCapture() {
     const st = settings();
-    if (!st.autoCapture || !this.lock.calibration) return false;
-    if (this.tracker.current.length !== st.rules.requiredRounds) return false;
-    if (this.tracker.all.some((t) => !t.confirmed)) return false; // something still being checked
+    if (!st.autoCapture || !this.lockedCal || !this.last) return false;
+    if (this.counted.length !== st.rules.requiredRounds) return false;
+    if (this.last.holes.some((t) => !t.confirmed)) return false; // something still being checked
     return performance.now() - this.lastChange > 2500;
   }
 
@@ -255,20 +209,12 @@ export class LiveSession {
     const v = this.video;
     const store = useAnalyzer.getState();
     if (!v || store.mode !== 'live') return;
-    const lockedCal = this.lock.calibration;
     const st = settings();
-    const holes = lockedCal
-      ? this.tracker.all.filter((t) => !t.printed).map((t) => ({
-          id: t.id,
-          p: toImage(lockedCal, t.pIn),
-          seq: t.seq,
-          confirmed: t.confirmed,
-          previous: t.previous,
-          merged: t.merged,
-        }))
-      : [];
+    const lockedCal = this.lockedCal;
+    const r = this.last;
+    const holes = lockedCal && r ? r.holes.map((t) => ({ id: t.id, p: t.p, seq: t.seq, confirmed: t.confirmed, previous: t.previous, merged: false })) : [];
     let captureIn: number | undefined;
-    if (st.autoCapture && lockedCal && this.tracker.current.length === st.rules.requiredRounds && !this.tracker.all.some((t) => !t.confirmed)) {
+    if (st.autoCapture && lockedCal && this.counted.length === st.rules.requiredRounds && !(r?.holes ?? []).some((t) => !t.confirmed)) {
       captureIn = Math.max(0, (2500 - (performance.now() - this.lastChange)) / 1000);
     }
     const ring = lockedCal ?? this.lock.latest;
@@ -280,22 +226,25 @@ export class LiveSession {
       width: v.videoWidth,
       height: v.videoHeight,
       ms: this.lastMs,
-      lowResolution: this.lastLowRes,
+      lowResolution: !!r?.lowResolution,
       error: this.lastError,
       captureIn,
-      learning: this.learning > 0,
+      learning: !!lockedCal && (!r || r.phase === 'learning'),
+      learnProgress: r?.learnProgress,
+      unstable: r?.phase === 'unstable',
     });
   }
 
   /** Snapshot for diagnostics (window.__rfaLive.debug() in the browser console). */
   debug() {
-    const f = (t: { pIn: { x: number; y: number } }) => [+t.pIn.x.toFixed(2), +t.pIn.y.toFixed(2)];
     return {
-      calibration: this.lock.calibration,
-      printed: this.tracker.printed.map(f),
-      counted: this.tracker.current.map(f),
-      checking: this.tracker.all.filter((t) => !t.confirmed).map(f),
-      learning: this.learning,
+      calibration: this.lockedCal,
+      phase: this.last?.phase,
+      changed: this.last?.changed,
+      shift: this.last?.shift,
+      holePx: this.last?.holePx,
+      counted: this.counted.map((t) => [+t.pIn.x.toFixed(2), +t.pIn.y.toFixed(2)]),
+      checking: (this.last?.holes ?? []).filter((t) => !t.confirmed).map((t) => [+t.pIn.x.toFixed(2), +t.pIn.y.toFixed(2)]),
     };
   }
 }

@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import type { Calibration, Shot, Vec2, ZeroStatus } from '../core/types';
 import type { LockPhase } from '../vision/tracker';
 import { vision } from '../services/vision';
-import { pxPerInch, toImage } from '../core/calibration';
+import { pxPerInch, targetCentre, toImage } from '../core/calibration';
 import { holeDiameterIn, settings } from './settings';
 import { notify } from './toast';
 import { today } from '../lib/format';
@@ -42,6 +42,10 @@ export interface LiveView {
   error?: string;
   captureIn?: number;
   learning?: boolean;
+  /** 0..1 while the target is being learned */
+  learnProgress?: number;
+  /** the picture is changing too much to count (camera bump, light, wind) */
+  unstable?: boolean;
 }
 
 export interface SessionMeta {
@@ -222,7 +226,7 @@ export const useAnalyzer = create<AnalyzerState>()((set, get) => {
         frame: { url: URL.createObjectURL(blob), blob, width, height, source },
         calibration: cal,
         shots,
-        poa: cal.center,
+        poa: targetCentre(cal),
         history: [],
         selectedId: null,
         live: null,
@@ -253,7 +257,7 @@ export const useAnalyzer = create<AnalyzerState>()((set, get) => {
         }
         const { kept, dropped } = withoutEarlierGroups(res.ring, res.holes ?? []);
         const shots: Shot[] = (kept as NonNullable<typeof res.holes>).map((h) => ({ id: sid(), p: h.p, source: 'auto', confidence: h.confidence, merged: h.merged }));
-        set({ calibration: res.ring, poa: res.ring.center, shots });
+        set({ calibration: res.ring, poa: targetCentre(res.ring), shots });
         notify('ok', 'Calibration done', 'Outer ring found automatically.');
         const req = settings().rules.requiredRounds;
         const doubt = shots.filter((s) => s.merged).length;
@@ -262,7 +266,7 @@ export const useAnalyzer = create<AnalyzerState>()((set, get) => {
           'Bullet marks done',
           `${shots.length} of ${req} found${dropped ? `, ${dropped} from earlier groups ignored` : ''}${doubt ? `. Check ${doubt} orange ${doubt === 1 ? 'mark' : 'marks'}` : ''}.`,
         );
-        if (res.lowResolution) notify('warn', 'Target is small in the picture', 'Move closer or zoom in for reliable holes.');
+        if (res.lowResolution) notify('warn', 'Target is small in the picture', 'Holes are only a few pixels wide: check the marks. For a CCTV camera use live view (it compares before and after each shot), or zoom in.');
       } catch (err) {
         notify('error', 'Detection failed', err instanceof Error ? err.message : String(err));
       } finally {
@@ -290,8 +294,9 @@ export const useAnalyzer = create<AnalyzerState>()((set, get) => {
 
     setCalibration: (c) => {
       const s = get();
-      const poaWasCentre = !s.poa || !s.calibration || Math.hypot(s.poa.x - s.calibration.center.x, s.poa.y - s.calibration.center.y) < 1;
-      commit({ calibration: c, poa: poaWasCentre ? c.center : s.poa });
+      const old = s.calibration ? targetCentre(s.calibration) : null;
+      const poaWasCentre = !s.poa || !old || Math.hypot(s.poa.x - old.x, s.poa.y - old.y) < 1;
+      commit({ calibration: c, poa: poaWasCentre ? targetCentre(c) : s.poa });
     },
 
     addMeasurePoint: (p) => set((s) => ({ measure: s.measure.length >= 2 ? [p] : [...s.measure, p] })),
@@ -304,7 +309,7 @@ export const useAnalyzer = create<AnalyzerState>()((set, get) => {
       const ppi = Math.hypot(b.x - a.x, b.y - a.y) / distanceIn;
       const diameterIn = settings().rules.targetDiameterIn;
       const hadRing = !!s.calibration && s.calibration.confidence > 0;
-      const center = hadRing ? s.calibration!.center : { x: f.width / 2, y: f.height / 2 };
+      const center = hadRing ? targetCentre(s.calibration!) : { x: f.width / 2, y: f.height / 2 };
       const cal: Calibration = { center, radiusX: (ppi * diameterIn) / 2, radiusY: (ppi * diameterIn) / 2, diameterIn, method: 'points', confidence: 1 };
       commit({ calibration: cal, poa: hadRing ? (s.poa ?? center) : center, measure: [], tool: hadRing ? 'move' : 'aim' });
       notify('ok', 'Calibration done', `Two points: 1 in = ${ppi.toFixed(1)} px.${hadRing ? '' : ' Now click the aiming point.'}`);
